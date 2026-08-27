@@ -118,7 +118,10 @@ pane *exists*, not when its command finishes, so the picker's exit code needs a 
 plus `tmux wait-for` to reach the caller at all. That carrier was verified against controlled
 arms — including the case where the human quits instantly and the signal beats the wait, and a
 known-bad arm with no `wait-for` that loses the code entirely. The command documents both, and
-the guards against the pane dying without ever signalling.
+the guards against the pane dying without ever signalling. The sentinel is *published* by rename
+rather than written in place, so a pane that dies mid-write strands its fragment under a `.part`
+name and the outcome reads as unknown — rather than a truncated `127` arriving as a confident,
+wrong `1`.
 
 Requires tmux. Without it the command shows your current bar and prints the line to run in your
 own terminal, rather than opening a pane somewhere you cannot see.
@@ -234,14 +237,20 @@ python3 lab/exit_contract_lab.py
 Exit `1` means *a defect in the picker — do not retry*; exit `2` means *an environment problem
 you can fix*. They carry opposite instructions, and any uncaught exception in `main()` exits
 `1` — so every environmental failure that escapes uncaught is silently relabelled as a
-permanent defect. This lab pins the two places that happened: a save into an unwritable
-directory, and a platform with no `termios`.
+permanent defect. This lab pins the two places that happened: a save the filesystem refuses,
+and a platform with no `termios`.
 
 It generates its own known-bad by **mutating the current source** — deleting the guard under
 test — rather than by checking out an older revision, because a history-based baseline stops
 being a known-bad the moment the fix merges. Each mutation asserts its anchor appears exactly
 once and aborts if it does not, so a refactor that moves a guard breaks this lab loudly
 instead of letting it pass while measuring nothing.
+
+The unsavable-directory fixture is built from `ENOTDIR` — a regular file used as the config's
+parent — and not from a `0o555` mode. Permission bits are discretionary and root ignores them,
+so under `sudo` the mode-based fixture would let both arms save happily, and the lab would
+report failures that say nothing about the picker. A precondition proves the fixture is
+genuinely unsavable before any arm is read.
 
 ## Status
 

@@ -28,10 +28,10 @@ the output file when it finishes.
 PICKER="$HOME/claude-code-statusline-picker/statusline_picker.py"
 CHAN="statusline-picker-$$"
 SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
-rm -f "$SENT" "$ERR"
+rm -f "$SENT" "$SENT.part" "$ERR"
 TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither by default
 tmux split-window -v -b -l 16 \
-  "python3 $PICKER 2>$ERR; echo \$? > $SENT; tmux wait-for -S $CHAN" \
+  "python3 $PICKER 2>$ERR; echo \$? > $SENT.part && mv $SENT.part $SENT; tmux wait-for -S $CHAN" \
   && ${TMO:+$TMO 900} tmux wait-for "$CHAN"
 
 if [ ! -f "$SENT" ]; then
@@ -42,7 +42,7 @@ else
 fi
 echo "picker-exit=$RC"
 [ -s "$ERR" ] && { echo "picker-stderr:"; cat "$ERR"; }
-rm -f "$SENT" "$ERR"
+rm -f "$SENT" "$SENT.part" "$ERR"
 ```
 
 `-v -b` stacks the pane ABOVE the session and `-l 16` gives it the ~14 lines it needs; a
@@ -85,15 +85,24 @@ Five consequences, each load-bearing:
   anyone reads it. Redirecting to `$ERR` is the only way the message survives the pane. The
   picker's UI goes to stdout, so this captures diagnostics and nothing else.
 
-The sentinel is read as untrusted input, not interpolated. A pane interrupted mid-write leaves
-an empty or partial file while `cat` still exits 0, and a pane shell that cannot find `python3`
-writes `127` — neither is a picker exit code. Anything outside `0`–`4` is reported as
-`unclassified` rather than passed off as a result.
+The sentinel is read as untrusted input, not interpolated. A `cat` of it exits 0 whatever it
+holds, and plenty of things that are not picker exit codes can end up there — a pane shell that
+cannot find `python3` writes `127`, and anything that fails before the picker runs writes its
+own code. Anything outside `0`–`4` is reported as `unclassified` rather than passed off as a
+result.
 
-One residual the classifier cannot close: a write truncated to a single digit that happens to
-be `0`–`4` is indistinguishable from a complete code. A pane killed after the `1` of `127`
-reads as a selftest failure. The window is one `write` of a few bytes, and nothing in the
-sentinel can tell the two apart — noted because it is a real gap, not a covered one.
+The classifier alone cannot catch every partial write, which is why the sentinel is *published*
+rather than written in place. A truncation to a single digit that happens to be `0`–`4` — a pane
+killed after the `1` of `127` — would be indistinguishable from a complete code, and the
+classifier would pass it through as a selftest failure. So the pane writes `$SENT.part` and
+renames it onto `$SENT` only once the write returned. `mv` within one filesystem is `rename(2)`,
+which is atomic: a reader sees the old name or the new one, never a half-built file. Every
+truncation therefore leaves the fragment under `.part`, `$SENT` never appears, and the outcome
+reports as `missing` — UNKNOWN, which is what it is — instead of as a confident wrong code.
+
+The `&&` between the write and the rename is what makes that hold. If the `echo` fails — a full
+`/tmp` being the realistic case — the rename does not run, and a partial `.part` is never
+promoted.
 
 ## Act on the exit code
 
@@ -104,8 +113,8 @@ sentinel can tell the two apart — noted because it is a real gap, not a covere
 | `3` | the human pressed `v` | hand off — see below |
 | `2` | environment or usage error | report the captured `picker-stderr:` block verbatim; do not paper over it |
 | `1` | selftest failures | a real defect in the picker; report it, do not retry |
-| `missing` | no sentinel file — pane died before it could report | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
-| `unclassified:[…]` | sentinel exists but holds something else | also UNKNOWN, and a different fault: the launcher or the synchronization broke, not the picker. `127` means the pane shell had no `python3`; empty means it was interrupted mid-write. Report the raw value and read the live state with `--show` |
+| `missing` | no sentinel file — the pane died before it could report, or died mid-write and its fragment was never promoted off `.part` | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
+| `unclassified:[…]` | sentinel exists and is complete, but holds something else | also UNKNOWN, and a different fault: the launcher or the synchronization broke, not the picker. `127` means the pane shell had no `python3`; any other value came from whatever ran in the pane instead. Report the raw value and read the live state with `--show` |
 
 Each block below re-states the path rather than reusing `$PICKER`. That is not redundancy —
 every block runs in its own shell, so a variable set in one is unset in the next, and

@@ -19,8 +19,13 @@ arm stops being a known-bad the moment the fix merges; a mutant does not. Each
 mutation asserts its anchor exists and fails loudly if it does not, so a
 refactor that moves the guard breaks this lab instead of silently passing it.
 
+The unsavable-directory fixture is built from ENOTDIR, not from a 0o555 mode:
+permission bits are discretionary and root ignores them, which would leave the
+F1 arms passing a save they were supposed to block. See cfg_unsavable, and the
+assert_unsavable precondition that proves the fixture before the arms run.
+
 Arms:
-    F1  save into an unwritable config dir  mutant -> 1, real -> 2
+    F1  save into an unsavable config dir   mutant -> 1, real -> 2
     F1  save into a writable dir            real   -> 0   (control)
     F6  platform without termios            mutant -> 1, real -> 2
 
@@ -128,11 +133,54 @@ def run_picker(script, cfg, no_termios=False, keys=b"\r", settle=2.5):
             pass
 
 
-def cfg_in(parent, writable):
-    d = os.path.join(parent, "w" if writable else "ro")
+def cfg_writable(parent):
+    d = os.path.join(parent, "w")
     os.makedirs(d, exist_ok=True)
-    os.chmod(d, 0o755 if writable else 0o555)
     return os.path.join(d, "statusline-config.json")
+
+
+def cfg_unsavable(parent):
+    """A config path whose PARENT is a regular file, so any save under it fails
+    with ENOTDIR.
+
+    The obvious construction -- a 0o555 directory -- tests a DISCRETIONARY
+    permission, and root bypasses those (CAP_DAC_OVERRIDE). Run this lab under
+    sudo, which this tool has been run under, and the mutant would save happily
+    and exit 0: the lab would report FAILED while never once exercising the
+    contract it exists to pin, and the failure would read as a regression in
+    the picker rather than as a broken fixture. ENOTDIR is structural, so it
+    holds at every uid. Measured: mkstemp(dir=<a regular file>) raises
+    NotADirectoryError, errno 20.
+
+    load_config catches OSError and falls back to the default selection, so the
+    read at startup is unaffected and the failure lands on the save -- which is
+    the site under test.
+    """
+    f = os.path.join(parent, "not-a-dir")
+    if not os.path.exists(f):
+        open(f, "w").close()
+    return os.path.join(f, "statusline-config.json")
+
+
+def assert_unsavable(path):
+    """Prove the fixture before trusting the arms built on it.
+
+    Without this, an environment where the save unexpectedly SUCCEEDS makes
+    both F1 arms return 0 and the lab report two failures with no hint that the
+    fixture, not the picker, is what broke.
+    """
+    try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    except OSError:
+        return
+    os.close(fd)
+    os.unlink(tmp)
+    raise SystemExit(
+        "lab error: the F1 fixture is writable in this environment -- a save "
+        "into %s succeeded.\nBoth F1 arms would exit 0 and the lab would report "
+        "failures that say nothing about the picker.\nFix the fixture; do not "
+        "read the arms." % os.path.dirname(path)
+    )
 
 
 def main():
@@ -144,18 +192,21 @@ def main():
         return 0
 
     tmp = tempfile.mkdtemp(prefix="exitcontract.")
-    print("-- F1: an unwritable config dir must be code 2, never code 1 --")
+    print("-- F1: an unsavable config dir must be code 2, never code 1 --")
+
+    bad = cfg_unsavable(tmp)
+    assert_unsavable(bad)
 
     mutant = mutate(F1_GUARD, F1_UNGUARDED, os.path.join(tmp, "f1_mutant.py"))
-    rc, err = run_picker(mutant, cfg_in(tmp, False))
+    rc, err = run_picker(mutant, bad)
     evidence("F1 known-bad: unguarded save exits 1", rc == 1,
              "rc=%s  %s" % (rc, err[:70]))
 
-    rc, err = run_picker(PICKER, cfg_in(tmp, False))
+    rc, err = run_picker(PICKER, bad)
     evidence("F1 fixed: guarded save exits 2", rc == 2,
              "rc=%s  %s" % (rc, err[:70]))
 
-    rc, _ = run_picker(PICKER, cfg_in(tmp, True))
+    rc, _ = run_picker(PICKER, cfg_writable(tmp))
     evidence("F1 control: a writable dir still saves (0)", rc == 0, "rc=%s" % rc)
 
     print("-- F6: a platform without termios must be code 2, never code 1 --")
@@ -168,11 +219,6 @@ def main():
     rc, err = run_picker(PICKER, os.path.join(tmp, "c6.json"), no_termios=True)
     evidence("F6 fixed: missing termios exits 2", rc == 2,
              "rc=%s  %s" % (rc, err[:70]))
-
-    for d in ("ro", "w"):
-        p = os.path.join(tmp, d)
-        if os.path.isdir(p):
-            os.chmod(p, 0o755)
 
     print("---")
     print("EXIT-CONTRACT LAB %s (%d failures)"
