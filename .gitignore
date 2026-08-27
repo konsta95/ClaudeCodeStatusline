@@ -1,0 +1,14 @@
+# Lab working tree — sandbox HOMEs, per-child TMPDIR, temp configs
+.lab-scratch/
+
+# The payload probe is opt-in via STATUSLINE_PAYLOAD_DUMP, but if you point it
+# at the repo, never commit what it writes: a captured payload carries your
+# session id, working directory, cost and rate-limit state.
+statusline-payload-last.json
+*.payload.json
+
+# Your own selection. The example lives at statusline-config.example.json.
+statusline-config.json
+
+__pycache__/
+*.pyc

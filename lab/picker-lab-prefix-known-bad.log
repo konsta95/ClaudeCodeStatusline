@@ -1,0 +1,33 @@
+EVIDENCE N1-leak                      FINDING  mkdtemp sandbox dirs in TMPDIR before=0 after=1 rc=0
+EVIDENCE N1-restart-artifact          ok       fixture preview shows a restart hint: 'none'
+EVIDENCE N2-probe-noop                ok       probe sha before==after: True rc=0
+EVIDENCE N3-empty-probe               FINDING  rc=0 preview=['preview: \x1b[2mstatusline error: Unexpected end of JSON input\x1b[0m\x1b[0m']
+EVIDENCE N4-corrupt-probe             FINDING  rc=0 preview=["preview: \x1b[2mstatusline error: Expected property name or '}' in JSON at position 1 (line 1 column 2)\x1b[0m\x1b[0m"]
+EVIDENCE N5-garbage-js                FINDING  rc=1 traceback=True stderr-tail='24)     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)     at node:internal/main/run_main_module:36:49  Node.js v22.22.1 '
+EVIDENCE N6-hung-segments             FINDING  rc=1 after 10.1s traceback=True tail="SCRATCH-REDACTED/picker-lab/home-n6/.claude/statusline.js', '--segments']' timed out after 10 seconds "
+EVIDENCE N7-missing-js                ok       rc=2 stderr='error: renderer not found: SCRATCH-REDACTED/picker-lab/home-n7-missin'
+EVIDENCE N7-no-tty                    ok       rc=2 stderr='error: interactive picker needs a TTY (use --show without one)'
+EVIDENCE N7-no-node                   ok       rc=2 stderr='error: node not on PATH (the renderer is a Node script)'
+EVIDENCE N8-config-dir                ok       rc=0 stderr=''
+EVIDENCE N9-selftest                  ok       rc=0 tail=['SELFTEST PASSED (0 failures)']
+EVIDENCE N10-colorsoff-ansi           FINDING  escape sequences in --show output with colors:false: 1
+EVIDENCE N11-payload-typo             FINDING  rc=0 fixture-preview=True path-mentioned-anywhere=False
+EVIDENCE N12-tmp-collision            FINDING  final-config-corrupt=True writer-A-replace=FileNotFoundError content='{"items": ["cost"], "context"], "colors": true}\n'
+EVIDENCE N13-garbage-registry         FINDING  rc=1 traceback=True tail='e", s, err.value) from None json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0) '
+EVIDENCE N1b-fixture-version          ok       fixture preview version segment renders as [b'v0.0.0\n']
+EVIDENCE P0-launch-flush              FINDING  first-frame=True q-during-launch-window dropped=True
+EVIDENCE P1-baseline                  ok       first-frame=True exit=0 termios-restored=True
+EVIDENCE P2-esc-swallow               FINDING  alive-after-ESC=True alive-after-ESC+q=True (q swallowed) final-exit=0
+EVIDENCE P3-ctrl-arrow                FINDING  ctrl-right flipped the colors line in some frame: True
+EVIDENCE P4-home-key                  ok       alive=True colors-flipped=False
+EVIDENCE P5-hung-preview              FINDING  traceback=True after 10.1s exit=256 termios-restored=True staircased=True
+EVIDENCE P6-narrow-pty                FINDING  longest frame line 86 cols on a 40-col pty (wraps=True)
+EVIDENCE P7-save                      ok       config={"items": ["model", "context", "five-hour-limit", "weekly-limit", "session", "cost", "version"], "colors": true}
+EVIDENCE P8-stale-probe-pin           FINDING  newer probe overwritten back to startup bytes: True (now=b'{\n "session_id": "11111111-222'...)
+EVIDENCE P9-ctrl-c                    ok       cancelled=True exit=0 termios-restored=True kbdint=False
+EVIDENCE F1-sha-flip                  FLIPPED  doctored probe changes sha: True
+EVIDENCE F2-colors-flip               FLIPPED  plain c toggles the colors line: True
+EVIDENCE F3-alive-termios             FLIPPED  raw-mode-detected-mid-run=True death-detected-after-q=True
+EVIDENCE F4-config-flip               FLIPPED  garbage config takes the exception branch: True
+---
+LAB COMPLETE

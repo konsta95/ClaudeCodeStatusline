@@ -1,0 +1,33 @@
+EVIDENCE N1-leak                      ok       mkdtemp sandbox dirs in TMPDIR before=0 after=0 rc=0
+EVIDENCE N1-restart-artifact          ok       claude-on-PATH=True restart-hint=True
+EVIDENCE N2-probe-noop                ok       probe sha before==after: True rc=0
+EVIDENCE N3-empty-probe               ok       rc=0 preview=['preview: \x1b[32mhome-n3-empty-probe\x1b[0m\x1b[2m|\x1b[0m\x1b[38;2;215;119;87mFable5\x1b[0m \x1b[31mmax\x1b[0m\x1b[2m|\x1b[0m\x1b[32m83K/1M\x1b[0m\x1b[2m|\x1b[0m\x1b[35m5h\x1b[0m \x1b[32m25%\x1b[0m\x1b[2m|\x1b[0m\x1b[35m7d\x1b[0m \x1b[32m5%\x1b[0m\x1b[2m|\x1b[0m\x1b[37m00000000-fixture\x1b[0m\x1b[2m|\x1b[0m\x1b[32m$1.23\x1b[0m\x1b[2m|\x1b[0m\x1b[33mv0.0.0→2.1.247 restart\x1b[0m\x1b[0m']
+EVIDENCE N4-corrupt-probe             ok       rc=0 preview=['preview: \x1b[32mhome-n4-corrupt-probe\x1b[0m\x1b[2m|\x1b[0m\x1b[38;2;215;119;87mFable5\x1b[0m \x1b[31mmax\x1b[0m\x1b[2m|\x1b[0m\x1b[32m83K/1M\x1b[0m\x1b[2m|\x1b[0m\x1b[35m5h\x1b[0m \x1b[32m25%\x1b[0m\x1b[2m|\x1b[0m\x1b[35m7d\x1b[0m \x1b[32m5%\x1b[0m\x1b[2m|\x1b[0m\x1b[37m00000000-fixture\x1b[0m\x1b[2m|\x1b[0m\x1b[32m$1.23\x1b[0m\x1b[2m|\x1b[0m\x1b[33mv0.0.0→2.1.247 restart\x1b[0m\x1b[0m']
+EVIDENCE N5-garbage-js                ok       rc=2 traceback=False stderr-tail='24)     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)     at node:internal/main/run_main_module:36:49  Node.js v22.22.1 '
+EVIDENCE N6-hung-segments             ok       rc=2 after 10.1s traceback=False tail='REPO-REDACTED/.lab-scratch/picker-lab/home-n6/.claude/statusline.js --segments timed out after 10s '
+EVIDENCE N7-missing-js                ok       rc=2 stderr='error: renderer not found: REPO-REDACTED/.lab-scratch/picker-l'
+EVIDENCE N7-no-tty                    ok       rc=2 stderr='error: interactive picker needs a TTY (use --show without one)'
+EVIDENCE N7-no-node                   ok       rc=2 stderr='error: node not on PATH (the renderer is a Node script)'
+EVIDENCE N8-config-dir                ok       rc=0 stderr=''
+EVIDENCE N9-selftest                  ok       rc=0 tail=['SELFTEST PASSED (0 failures)']
+EVIDENCE N10-colorsoff-ansi           ok       escape sequences in --show output with colors:false: 0
+EVIDENCE N11-payload-typo             ok       rc=2 fixture-preview=False path-mentioned-anywhere=True
+EVIDENCE N12-tmp-collision            ok       reader saw 0/641 corrupt-or-missing states, writer-crashes=none, tmp-residue=0
+EVIDENCE N13-garbage-registry         ok       rc=2 traceback=False tail="-n13/.claude/statusline.js --segments printed something other than the registry: b'hello, not json' "
+EVIDENCE N1b-fixture-version          ok       fixture preview version segment renders as [b'v0.0.0\xe2\x86\x922.1.247 restart\n']
+EVIDENCE P0-launch-flush              ok       first-frame=True cancelled=True exit=0 dropped=False
+EVIDENCE P1-baseline                  ok       first-frame=True exit=0 termios-restored=True
+EVIDENCE P2-esc-swallow               ok       alive-after-ESC=False alive-after-ESC+q=False (q swallowed) final-exit=0
+EVIDENCE P3-ctrl-arrow                ok       ctrl-right flipped the colors line in some frame: False
+EVIDENCE P4-home-key                  ok       alive=True colors-flipped=False
+EVIDENCE P5-hung-preview              ok       timeout-notice=True after 10.0s survived=True traceback=False exit=0 termios-restored=True
+EVIDENCE P6-narrow-pty                ok       autowrap-off-before-frames=True restored-on-exit=True longest-line=96 cols on a 40-col pty
+EVIDENCE P7-save                      ok       config={"items": ["model", "context", "five-hour-limit", "weekly-limit", "session", "cost", "version"], "colors": true}
+EVIDENCE P8-stale-probe-pin           ok       newer probe overwritten back to startup bytes: False (now=b'{\n "marker": "NEWER-PROBE"\n}'...)
+EVIDENCE P9-ctrl-c                    ok       cancelled=True exit=0 termios-restored=True kbdint=False
+EVIDENCE F1-sha-flip                  FLIPPED  doctored probe changes sha: True
+EVIDENCE F2-colors-flip               FLIPPED  plain c toggles the colors line: True
+EVIDENCE F3-alive-termios             FLIPPED  raw-mode-detected-mid-run=True death-detected-after-q=True
+EVIDENCE F4-config-flip               FLIPPED  garbage config takes the exception branch: True
+---
+LAB COMPLETE

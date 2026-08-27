@@ -1,0 +1,13 @@
+{
+  "items": [
+    "git-branch",
+    "model",
+    "context",
+    "five-hour-limit",
+    "weekly-limit",
+    "session",
+    "cost",
+    "version"
+  ],
+  "colors": true
+}
