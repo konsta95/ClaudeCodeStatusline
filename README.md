@@ -38,6 +38,13 @@ a fix. A built-in picker would need neither.
 
 Requires Node.js and Python 3. No dependencies, no build step, no network access.
 
+**Platforms.** Linux and macOS. The interactive picker needs a POSIX terminal — it puts the
+tty in raw mode through `termios` — so on Windows use WSL; `--show` and `--selftest` run
+anywhere, and a Windows launch exits `2` with that explanation rather than a traceback. The
+`/statusline` command additionally wants `tmux`, and its watchdog wants GNU `timeout`, which
+base macOS does not ship: install coreutils (Homebrew names it `gtimeout`) and the command
+finds either. Without one it still runs, but the wait for the pane is then unbounded.
+
 ```bash
 git clone https://github.com/konsta95/claude-code-statusline-picker
 cd claude-code-statusline-picker
@@ -91,8 +98,10 @@ opened it — so the exit code is the only channel out, and a shared `0` would l
 ## Use it from inside Claude Code
 
 `commands/statusline.md` is a slash command that opens the picker in a tmux pane above your
-session. Copy it to `~/.claude/commands/statusline.md` and set the `PICKER` path at the top to
-your clone. A user command shadows the built-in of the same name, so `/statusline` reaches it.
+session. Copy it to `~/.claude/commands/statusline.md`. It assumes the clone lives at
+`~/claude-code-statusline-picker`; if yours does not, change the path in every block of that
+file, since each runs in its own shell and none inherits from another. A user command shadows
+the built-in of the same name, so `/statusline` reaches it.
 
 ```bash
 mkdir -p ~/.claude/commands
@@ -215,6 +224,24 @@ there. The pre-fix log was captured when the lab still ran out of a volatile scr
 directory, so its two redactions (`SCRATCH-REDACTED`) covered a path carrying a session
 UUID; the lab now scratches inside the repo, so the post-fix log's two redactions
 (`REPO-REDACTED`) cover only a checkout path and it contains no identifiers at all.
+
+### The exit-code contract
+
+```bash
+python3 lab/exit_contract_lab.py
+```
+
+Exit `1` means *a defect in the picker — do not retry*; exit `2` means *an environment problem
+you can fix*. They carry opposite instructions, and any uncaught exception in `main()` exits
+`1` — so every environmental failure that escapes uncaught is silently relabelled as a
+permanent defect. This lab pins the two places that happened: a save into an unwritable
+directory, and a platform with no `termios`.
+
+It generates its own known-bad by **mutating the current source** — deleting the guard under
+test — rather than by checking out an older revision, because a history-based baseline stops
+being a known-bad the moment the fix merges. Each mutation asserts its anchor appears exactly
+once and aborts if it does not, so a refactor that moves a guard breaks this lab loudly
+instead of letting it pass while measuring nothing.
 
 ## Status
 
