@@ -121,7 +121,9 @@ known-bad arm with no `wait-for` that loses the code entirely. The command docum
 the guards against the pane dying without ever signalling. The sentinel is *published* by rename
 rather than written in place, so a pane that dies mid-write strands its fragment under a `.part`
 name and the outcome reads as unknown — rather than a truncated `127` arriving as a confident,
-wrong `1`.
+wrong `1`. The pane also pre-flights its stderr file before launching, because a shell that
+cannot open a redirect never runs the command and exits `1` on its own — which would report the
+picker as defective for a failure that happened before it started.
 
 Requires tmux. Without it the command shows your current bar and prints the line to run in your
 own terminal, rather than opening a pane somewhere you cannot see.

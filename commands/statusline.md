@@ -31,7 +31,8 @@ SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
 rm -f "$SENT" "$SENT.part" "$ERR"
 TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither by default
 tmux split-window -v -b -l 16 \
-  "python3 $PICKER 2>$ERR; echo \$? > $SENT.part && mv $SENT.part $SENT; tmux wait-for -S $CHAN" \
+  "if : 2>>\"$ERR\"; then python3 \"$PICKER\" 2>>\"$ERR\"; RC=\$?; else RC=setup; fi
+   echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN" \
   && ${TMO:+$TMO 900} tmux wait-for "$CHAN"
 
 if [ ! -f "$SENT" ]; then
@@ -84,6 +85,16 @@ Five consequences, each load-bearing:
   and the pane closes when its command ends — so an error the picker prints is gone before
   anyone reads it. Redirecting to `$ERR` is the only way the message survives the pane. The
   picker's UI goes to stdout, so this captures diagnostics and nothing else.
+- **That redirect has to be pre-flighted.** If the pane shell cannot open `$ERR`, bash does not
+  run the command at all and the status is `1` — which is exactly the code the table below reads
+  as a picker selftest failure. The picker would never have started, and the report would name it
+  as defective. So the pane opens `$ERR` once through a no-op (`: 2>>"$ERR"`) before committing to
+  the launch, and publishes the token `setup` when that fails. `setup` is outside `0`–`4`, so it
+  surfaces as `unclassified:[setup]` — UNKNOWN, and pointing at the launcher rather than at the
+  picker. Measured: with `$ERR` under a path that returns ENOTDIR, the unguarded shape published
+  `1` with the picker demonstrably never invoked; the guarded shape published `setup`; and with a
+  writable `$ERR` the guard changed nothing — a save still published `0` and a genuine picker
+  failure still published its own `2`.
 
 The sentinel is read as untrusted input, not interpolated. A `cat` of it exits 0 whatever it
 holds, and plenty of things that are not picker exit codes can end up there — a pane shell that
@@ -114,7 +125,7 @@ promoted.
 | `2` | environment or usage error | report the captured `picker-stderr:` block verbatim; do not paper over it |
 | `1` | selftest failures | a real defect in the picker; report it, do not retry |
 | `missing` | no sentinel file — the pane died before it could report, or died mid-write and its fragment was never promoted off `.part` | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
-| `unclassified:[…]` | sentinel exists and is complete, but holds something else | also UNKNOWN, and a different fault: the launcher or the synchronization broke, not the picker. `127` means the pane shell had no `python3`; any other value came from whatever ran in the pane instead. Report the raw value and read the live state with `--show` |
+| `unclassified:[…]` | sentinel exists and is complete, but holds something else | also UNKNOWN. Two values are known: `setup` means the pane could not open `$ERR` and the picker never started; `127` means the pane shell had no `python3`. Anything else is genuinely unattributed — the picker may never have run, or may have been killed part-way, which is where a shell's signal statuses like `130` (SIGINT) or `143` (SIGTERM) come from. Do not say which. Report the raw value and read the live state with `--show` |
 
 Each block below re-states the path rather than reusing `$PICKER`. That is not redundancy —
 every block runs in its own shell, so a variable set in one is unset in the next, and
@@ -158,7 +169,7 @@ python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show
 ```
 
 ```
-python3 ~/claude-code-statusline-picker/statusline_picker.py
+python3 "$HOME/claude-code-statusline-picker/statusline_picker.py"
 ```
 
 ## Notes
