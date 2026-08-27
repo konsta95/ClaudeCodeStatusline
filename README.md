@@ -29,8 +29,10 @@ configurations through the real renderer, and writes an ordered selection the re
 up on its next render — without restarting or interrupting the running session.
 
 The one thing a prototype cannot fix is the thing the request is actually about: this picker
-needs a controlling terminal, so you have to leave your Claude Code session to configure your
-Claude Code status line.
+needs a controlling terminal, so it cannot live inside the Claude Code TUI. The `/statusline`
+command in this repo gets as close as an outside tool can — a tmux pane stacked above your
+session, so you no longer leave the terminal — but that is a workaround with a dependency, not
+a fix. A built-in picker would need neither.
 
 ## Install
 
@@ -65,6 +67,7 @@ python3 statusline_picker.py
 | `space` | toggle the component on/off |
 | `←` `→` | reorder |
 | `c` | toggle colours |
+| `v` | hand off to Claude Code's built-in statusline setup |
 | `Enter` | save |
 | `q` / `Esc` / `Ctrl-C` | cancel without saving |
 
@@ -72,11 +75,44 @@ Non-interactive uses:
 
 ```bash
 python3 statusline_picker.py --show      # render a preview and exit; no TTY needed
-python3 statusline_picker.py --selftest  # 26 checks including pty coverage
+python3 statusline_picker.py --selftest  # 30 checks including pty coverage
 python3 statusline_picker.py --payload FILE   # preview against a captured payload
 ```
 
-Exit codes: `0` success, `1` selftest failures, `2` environment or usage error.
+Exit codes: `0` **saved**, `1` selftest failures, `2` environment or usage error, `3` the human
+pressed `v` and the caller should hand off to the built-in setup, `4` cancelled with nothing
+written.
+
+Cancel gets its own code rather than sharing `0` with a save. Callers usually run the picker in
+a pane they cannot read — the outcome line goes to that pane's screen, not back to whoever
+opened it — so the exit code is the only channel out, and a shared `0` would leave "saved" and
+"cancelled" indistinguishable.
+
+## Use it from inside Claude Code
+
+`commands/statusline.md` is a slash command that opens the picker in a tmux pane above your
+session. Copy it to `~/.claude/commands/statusline.md` and set the `PICKER` path at the top to
+your clone. A user command shadows the built-in of the same name, so `/statusline` reaches it.
+
+```bash
+mkdir -p ~/.claude/commands
+cp commands/statusline.md ~/.claude/commands/statusline.md
+```
+
+It does not replace Claude Code's built-in workflow — it composes with it. Pressing `v` in the
+picker leaves your config untouched, exits `3`, and the command spawns the built-in
+`statusline-setup` agent for you, after telling you which `statusLine` value that agent is about
+to overwrite.
+
+The mechanism is worth one line because it is not obvious: `tmux split-window` returns when the
+pane *exists*, not when its command finishes, so the picker's exit code needs a sentinel file
+plus `tmux wait-for` to reach the caller at all. That carrier was verified against controlled
+arms — including the case where the human quits instantly and the signal beats the wait, and a
+known-bad arm with no `wait-for` that loses the code entirely. The command documents both, and
+the guards against the pane dying without ever signalling.
+
+Requires tmux. Without it the command shows your current bar and prints the line to run in your
+own terminal, rather than opening a pane somewhere you cannot see.
 
 ## Components
 

@@ -25,10 +25,26 @@ and this tool implement the same forgiving parse. Delete the file to restore
 defaults.
 
 Keys: up/down move the cursor, space toggles, left/right reorder within the
-enabled block, c toggles colors, Enter saves, q/Q/Esc/ctrl-C cancel.
+enabled block, c toggles colors, v hands off to Claude Code's own statusline
+setup, Enter saves, q/Q/Esc/ctrl-C cancel.
 Modified arrows (e.g. ctrl-right) act as their plain arrow.
 
-Exit codes: 0 success, 1 selftest failures, 2 environment or usage errors.
+``v`` is a HANDOFF, not a feature: this is a standalone TUI and cannot spawn a
+Claude Code agent, so it leaves the config untouched and exits 3 to say "the
+human asked for the built-in workflow instead". Acting on that belongs to
+whoever launched the picker -- see the ``/statusline`` command shipped in this
+repo, which spawns the built-in ``statusline-setup`` agent when it sees a 3.
+Nothing here knows what a slash command is, and it should stay that way.
+
+Exit codes: 0 SAVED, 1 selftest failures, 2 environment or usage errors,
+3 the human chose the built-in setup and the caller should hand off to it,
+4 cancelled with nothing written.
+
+Cancel gets its own code rather than sharing 0 with a save. A caller typically
+runs this in a pane it cannot read -- the outcome line goes to that pane's
+screen, not back to whoever opened it -- so the exit code is the ONLY channel
+out, and a shared 0 would leave "saved" and "cancelled" indistinguishable. A
+caller that guessed would report a save that never happened.
 
 CLI::
 
@@ -287,7 +303,7 @@ class PickerState:
 def draw(state, preview, write):
     write("\x1b[2J\x1b[H")
     write("statusline picker -- space toggle, left/right reorder, c colors, "
-          "Enter save, q/Esc cancel\r\n")
+          "v built-in setup, Enter save, q/Esc cancel\r\n")
     write("\r\npreview: " + preview.replace("\n", "") + "\x1b[0m\r\n\r\n")
     for idx, rid in enumerate(state.rows()):
         cursor = ">" if idx == state.cursor else " "
@@ -301,8 +317,12 @@ def draw(state, preview, write):
 
 
 def run_picker(state, keys, previewer, write):
-    """Drive the picker with a key-token stream. Returns 'saved' or
-    'cancelled'; the caller persists. Injectable for the selftest."""
+    """Drive the picker with a key-token stream. Returns 'saved', 'cancelled'
+    or 'customize'; the caller persists. Injectable for the selftest.
+
+    'customize' is a cancel that carries a reason: the config is left untouched
+    exactly as on 'cancelled', and the only difference is what the caller is
+    told to do next."""
     keys = iter(keys)
     dirty = True
     preview = ""
@@ -332,6 +352,8 @@ def run_picker(state, keys, previewer, write):
         elif key == "colors":
             state.colors = not state.colors
             dirty = True
+        elif key == "customize":
+            return "customize"
         elif key == "enter":
             return "saved"
         elif key == "quit":
@@ -391,6 +413,8 @@ def read_keys_tty(stdin):
                 yield "space"
             elif ch in (b"c", b"C"):
                 yield "colors"
+            elif ch in (b"v", b"V"):
+                yield "customize"
             elif ch in (b"q", b"Q", b"\x03"):
                 yield "quit"
     finally:
@@ -487,6 +511,14 @@ def selftest():
         st4 = PickerState(registry, ["a"], True)
         outcome4 = run_picker(st4, iter(["space", "quit"]), lambda _s: "p", lambda _s: None)
         check("quit cancels", outcome4 == "cancelled")
+        # customize is a cancel that carries a reason: the caller must be able
+        # to tell it apart from a plain cancel, and edits made before pressing
+        # it must NOT be treated as a save
+        st4b = PickerState(registry, ["a"], True)
+        outcome4b = run_picker(st4b, iter(["space", "customize"]), lambda _s: "p",
+                               lambda _s: None)
+        check("customize returns its own outcome", outcome4b == "customize")
+        check("customize is distinguishable from cancel", outcome4b != "cancelled")
         # exhausted key stream (no Enter) must not save either
         st5 = PickerState(registry, ["a"], True)
         outcome5 = run_picker(st5, iter(["down"]), lambda _s: "p", lambda _s: None)
@@ -559,6 +591,10 @@ def selftest():
             check("pty reader: modified arrow acts as its arrow", next(gen) == "right")
             os.write(master, b"c")
             check("pty reader: binding intact after CSI tail", next(gen) == "colors")
+            os.write(master, b"v")
+            check("pty reader: v yields customize", next(gen) == "customize")
+            os.write(master, b"V")
+            check("pty reader: V yields customize", next(gen) == "customize")
             os.write(master, b"\x1bq")
             check("pty reader: alt-chord discarded whole", next(gen) == "other")
             os.write(master, b"q")
@@ -670,8 +706,17 @@ def main():
         print("items:  %s" % (", ".join(state.enabled) or "(none -- empty line)"))
         print("colors: %s" % ("on" if state.colors else "off"))
         print("takes effect on the next statusline refresh; delete the file to restore defaults")
+    elif outcome == "customize":
+        # Deliberately says what the human asked for, not what should happen
+        # next: this tool has no idea who launched it or what "hand off" means
+        # in that context. The exit code is the contract; the line is for a
+        # human reading the pane before it closes.
+        print("customize -- %s untouched" % args.config)
+        print("handing off to Claude Code's built-in statusline setup")
+        sys.exit(3)
     else:
         print("cancelled -- %s untouched" % args.config)
+        sys.exit(4)
 
 
 if __name__ == "__main__":
