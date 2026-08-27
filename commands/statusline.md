@@ -31,7 +31,7 @@ SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
 rm -f "$SENT" "$SENT.part" "$ERR"
 TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither by default
 tmux split-window -v -b -l 16 \
-  "if : 2>>\"$ERR\"; then python3 \"$PICKER\" 2>>\"$ERR\"; RC=\$?; else RC=setup; fi
+  "if : 2>>\"$ERR\" && exec 9>>\"$ERR\"; then python3 \"$PICKER\" 2>&9; RC=\$?; else RC=setup; fi
    echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN" \
   && ${TMO:+$TMO 900} tmux wait-for "$CHAN"
 
@@ -85,16 +85,26 @@ Five consequences, each load-bearing:
   and the pane closes when its command ends — so an error the picker prints is gone before
   anyone reads it. Redirecting to `$ERR` is the only way the message survives the pane. The
   picker's UI goes to stdout, so this captures diagnostics and nothing else.
-- **That redirect has to be pre-flighted.** If the pane shell cannot open `$ERR`, bash does not
-  run the command at all and the status is `1` — which is exactly the code the table below reads
-  as a picker selftest failure. The picker would never have started, and the report would name it
-  as defective. So the pane opens `$ERR` once through a no-op (`: 2>>"$ERR"`) before committing to
-  the launch, and publishes the token `setup` when that fails. `setup` is outside `0`–`4`, so it
-  surfaces as `unclassified:[setup]` — UNKNOWN, and pointing at the launcher rather than at the
-  picker. Measured: with `$ERR` under a path that returns ENOTDIR, the unguarded shape published
-  `1` with the picker demonstrably never invoked; the guarded shape published `setup`; and with a
-  writable `$ERR` the guard changed nothing — a save still published `0` and a genuine picker
-  failure still published its own `2`.
+- **That redirect has to be pre-flighted, and opened only once.** If the pane shell cannot open
+  `$ERR`, bash does not run the command at all and the status is `1` — which is exactly the code
+  the table below reads as a picker selftest failure. The picker would never have started, and the
+  report would name it as defective. So the pane probes `$ERR` with a no-op, then opens it once on
+  fd 9 and hands the picker that descriptor with `2>&9`. Two separate opens would leave a window
+  in which the probe succeeds and the launch's own open fails, putting `1` back on the wire;
+  reusing the descriptor closes it. Anything that fails before the launch publishes the token
+  `setup`, which is outside `0`–`4` and so surfaces as `unclassified:[setup]` — UNKNOWN, and
+  pointing at the launcher rather than at the picker.
+
+  The `:` probe stays in front of the `exec` rather than being replaced by it, because the two
+  fail differently. Measured: a failed `exec 9>>` leaves bash running and reaches the `else`, but
+  under dash it **exits the shell** — which would kill the pane before it writes anything. Short-
+  circuiting on the probe means the ordinary unopenable-stderr case reaches `setup` on either
+  shell, and only the race window can reach the `exec` at all, where the worst case degrades to a
+  missing sentinel rather than to a confident `1`. Also measured: `2>&9` carries stderr to the
+  file and preserves the exit status; under a forced race the one-open shape published the
+  picker's real `0` where the two-open shape published `1`; and with a writable `$ERR` none of
+  this changes the normal path — a save still publishes `0` and a genuine picker failure still
+  publishes its own `2`.
 
 The sentinel is read as untrusted input, not interpolated. A `cat` of it exits 0 whatever it
 holds, and plenty of things that are not picker exit codes can end up there — a pane shell that
