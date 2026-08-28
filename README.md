@@ -260,6 +260,49 @@ so under `sudo` the mode-based fixture would let both arms save happily, and the
 report failures that say nothing about the picker. A precondition proves the fixture is
 genuinely unsavable before any arm is read.
 
+### The carrier
+
+```bash
+python3 lab/carrier_lab.py
+```
+
+The exit-code lab covers what the picker does. This covers what the `/statusline` command does
+with it — the pane, the sentinel file, the bounded wait, and the classification of whatever
+comes back — across ten live tmux arms. The carrier under test is **extracted from
+`commands/statusline.md`** rather than retyped, so a passing arm says something about the
+shipped text and not about a copy that drifted, and the three pre-fix controls are built by
+reverting one region each of that same extracted text.
+
+Two of the arms are the same run reported twice. `F` holds a picker sleeping past the
+watchdog; `G` holds one that has already saved and exited, with the sentinel's publication
+widened until it is observable rather than raced for. Both come back `still-open` over a live
+pane, and they differ only in something the carrier cannot see — so the pair is what
+establishes that `still-open` carries no picker state at all. One arm alone would have read
+as an edge case.
+
+The probe behind that pair matches the picker's pid *and* its `argv`, because a reused pid
+would otherwise read as still running, and it matches the exact picker path rather than a
+pattern, because the pane's own shell carries that path in its command line — a `pgrep -f`
+test reports the picker alive in every arm, forever.
+
+Failure paths were watched firing rather than assumed: breaking the carrier's reporting line
+in a throwaway copy of the repo produced `CARRIER LAB FAILED (9 arms disagreed)` and exit `1`,
+and removing a mutation anchor produced exit `2` — the lab refusing to build a control that
+would no longer revert what it names.
+
+### A failed save
+
+```bash
+python3 lab/save_failure_probe.py
+```
+
+The command documents that nothing is written for any picker exit code other than `0`. Three
+of the four non-zero codes never reach the save path at all, so the whole claim rests on `2`,
+which is what a failed save exits with. This drives the real picker over a pty against a
+read-only config directory and checks the config byte-for-byte afterwards, along with the
+directory it writes its temp into. It refuses to report at all under `sudo`: mode `0o555` does
+not bind for root, the save would succeed, and a pass measured that way would be vacuous.
+
 ## Status
 
 This is a prototype demonstrating feasibility, not a supported tool. It is deliberately small
