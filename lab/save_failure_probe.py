@@ -158,13 +158,30 @@ def main():
         with open(cfg, encoding="utf-8") as fh:
             after = fh.read()
         stranded = sorted(f for f in os.listdir(cfgdir) if f != os.path.basename(cfg))
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError) as exc:
+        # Attribution, and that is the whole distinction between this branch and
+        # the next. The setup wrote cfg, chmod'd cfgdir and wrote a witness
+        # inside it, so both existed with the right types when the picker
+        # started, and r-x is enough to read and list afterwards even where the
+        # restore to 0o755 failed. A config that is GONE, replaced by a
+        # directory, or whose directory became a file is therefore the
+        # after == before guarantee broken harder than a changed config -- this
+        # probe's own assertion, not an environment it could not read. Filing it
+        # as unmeasured would swallow the most severe failure the probe exists
+        # to catch. The reverse error, blaming the picker for something outside
+        # it, prints the kept tree and gets looked at.
+        print("---")
+        print("SAVE-FAILURE PROBE FAILED (1)")
+        print("  - the picker removed or replaced the config state: %s" % exc)
+        print("working tree kept for inspection: %s" % work)
+        return 1
     except OSError as exc:
-        # Both reads sit AFTER the finally that restored the mode, so a picker
-        # that removed cfg or left cfgdir unlistable escapes here -- and an
-        # uncaught exception exits 1, the one code this file reserves for "a
-        # real defect". A state we cannot read back is the environment failing,
-        # the same class as the rc==2 branch below, so it reports 2 and keeps
-        # the tree rather than asserting a verdict nothing measured.
+        # Everything else names no actor: a permission or I/O error on a path
+        # that still exists and still has the right type. The mode restore is
+        # reported rather than raised, so a fixture stuck at 0o555 reaches here.
+        # An uncaught exception would exit 1, the code this file reserves for "a
+        # real defect", so this reports 2 and keeps the tree instead of
+        # asserting a verdict nothing measured.
         print("---")
         print("probe error: the post-run inspection could not read the config state "
               "back: %s\nThe picker ran, but nothing here observed whether the save "
