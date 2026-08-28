@@ -33,7 +33,8 @@ TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither b
 tmux split-window -v -b -l 16 \
   "if : 2>>\"$ERR\" && exec 9>>\"$ERR\"; then python3 \"$PICKER\" 2>&9; RC=\$?; else RC=setup; fi
    echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN" \
-  && ${TMO:+$TMO 900} tmux wait-for "$CHAN"
+  && if [ -n "$TMO" ]; then "$TMO" 900 tmux wait-for "$CHAN"
+     else tmux wait-for "$CHAN"; fi
 
 if [ ! -f "$SENT" ]; then
   RC=missing
@@ -66,16 +67,26 @@ controlled arms:
 | no `wait-for` at all | known-bad control | sentinel MISSING |
 | nothing ever signals | the deadlock | `timeout` returns 124 |
 
-Five consequences, each load-bearing:
+The consequences, each load-bearing:
 
 - **The `timeout` is not decoration.** A pane killed, closed, or lost to a tmux server restart
   signals nothing, and a bare `tmux wait-for` then blocks forever.
 - **The `timeout` is also not guaranteed to exist.** Base macOS ships no `timeout`; Homebrew's
   coreutils installs it as `gtimeout`, and someone who got tmux from Homebrew need not have
-  coreutils at all. `command -v` picks whichever is present, and `${TMO:+…}` drops the wrapper
-  entirely when neither is — degrading to the unbounded wait rather than dying on
+  coreutils at all. `command -v` picks whichever is present, and the `[ -n "$TMO" ]` branch drops
+  the wrapper entirely when neither is — degrading to the unbounded wait rather than dying on
   `command not found`. That degradation is deliberate but it is a real loss: on such a box the
   deadlock arm above has nothing bounding it.
+
+  That has to be a branch and not a `${TMO:+$TMO 900}` expansion, because the expansion
+  field-splits. A `timeout` living under a path with a space in it — a Homebrew prefix someone
+  relocated, say — splits into two words, the first of which is not a command. Measured: `rc=127`
+  and the wait returns in `0.00s` instead of blocking. That is worse than having no timeout at
+  all. The parent then reads a sentinel the pane has not written yet, reports `missing`, and
+  `rm -f`s the files while the pane is still running — so the code is not merely lost, the pane
+  is left writing into a path the parent has already torn down. Quoting `"$TMO"` in an explicit
+  branch keeps it one command; both controls — a plain path, and no `timeout` at all — still
+  wait the full duration.
 - **The `&&` before the wait is not decoration.** A failed split returns 1, and waiting on a
   channel that no pane will ever signal is the same deadlock.
 - **The picker must stay a child process.** Anything that exits the pane's own shell rather
