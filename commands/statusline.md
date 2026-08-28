@@ -84,12 +84,15 @@ The consequences, each load-bearing:
   than `missing` — the difference between "I do not know" and "the pane is still there".
 
   What `still-open` does NOT tell you is whether anything was saved, and the temptation to read it
-  that way is why this is written down. A live pane proves the pane exists, nothing more. The
-  picker's exit and the sentinel's publication are two separate steps, so a picker that has
+  that way is why this is written down. A live pane proves the pane exists, nothing more — not even
+  that the picker is still running. The picker's exit and the sentinel's publication are two
+  separate steps, and the pane outlives the first to perform the second, so a picker that has
   already written the config and is one `mv` away from reporting looks, from out here, exactly
   like a human who walked away mid-edit. Measured, with the window widened so it was observable
-  rather than raced for: `picker-exit=still-open` and the config file already on disk, in the same
-  run. Report the pane, not the outcome, and read the live state with `--show` if it matters.
+  rather than raced for: `picker-exit=still-open`, the config already on disk, and the picker
+  process already gone, in one run — against a control arm reporting the same `still-open` over
+  the same live pane with the picker still running. Two different states, one indistinguishable
+  report. Report the pane, not the outcome, and read the live state with `--show` if it matters.
 
   The liveness check has to be `list-panes` with a filter, and that is measured too, because the
   obvious check is wrong. `tmux display-message -p -t "$PANE"` returns 0 for a pane that has
@@ -171,7 +174,7 @@ promoted.
 | `3` | the human pressed `v` | hand off — see below |
 | `2` | environment or usage error | report the captured `picker-stderr:` block verbatim; do not paper over it |
 | `1` | selftest failures | a real defect in the picker; report it, do not retry |
-| `still-open` | the bounded wait expired and the pane is still alive | not a result, so do not report one. The pane's existence is all that is known — usually the human is still editing, but a save that has finished while the sentinel is still being published is indistinguishable from here. Say the picker is still open above them and that no outcome has arrived; do not say whether anything was written. Nothing was cleaned up and it finishes on its own; use `--show` if the live state matters |
+| `still-open` | the bounded wait expired and the pane is still alive | not a result, so do not report one. The pane's existence is all that is known — usually the human is still editing, but a save that has finished while the sentinel is still being published is indistinguishable from here. Say the pane above them is still open and that no outcome has arrived; do not say the picker is still open, and do not say whether anything was written. Nothing was cleaned up and it finishes on its own; use `--show` if the live state matters |
 | `missing` | no sentinel file and no pane — it died before it could report, or died mid-write and its fragment was never promoted off `.part` | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
 | `unclassified:[…]` | sentinel exists and is complete, but holds something else | also UNKNOWN. Two values are known: `setup` means the pane could not open `$ERR` and the picker never started; `127` means the pane shell had no `python3`. Anything else is genuinely unattributed — the picker may never have run, or may have been killed part-way, which is where a shell's signal statuses like `130` (SIGINT) or `143` (SIGTERM) come from. Do not say which. Report the raw value and read the live state with `--show` |
 
