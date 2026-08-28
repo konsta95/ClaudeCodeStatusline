@@ -154,9 +154,24 @@ def main():
                   "above still stands; the tree may need removing by hand."
                   % (cfgdir, exc), file=sys.stderr)
 
-    with open(cfg, encoding="utf-8") as fh:
-        after = fh.read()
-    stranded = sorted(f for f in os.listdir(cfgdir) if f != os.path.basename(cfg))
+    try:
+        with open(cfg, encoding="utf-8") as fh:
+            after = fh.read()
+        stranded = sorted(f for f in os.listdir(cfgdir) if f != os.path.basename(cfg))
+    except OSError as exc:
+        # Both reads sit AFTER the finally that restored the mode, so a picker
+        # that removed cfg or left cfgdir unlistable escapes here -- and an
+        # uncaught exception exits 1, the one code this file reserves for "a
+        # real defect". A state we cannot read back is the environment failing,
+        # the same class as the rc==2 branch below, so it reports 2 and keeps
+        # the tree rather than asserting a verdict nothing measured.
+        print("---")
+        print("probe error: the post-run inspection could not read the config state "
+              "back: %s\nThe picker ran, but nothing here observed whether the save "
+              "held, so this is an\nunmeasured run and not a defect verdict."
+              % exc, file=sys.stderr)
+        print("working tree kept for inspection: %s" % work)
+        return 2
     # Two predicates on purpose. The loose one is what a human wants to read;
     # the strict one is the assertion. They are not interchangeable: "error"
     # matches all eight of the picker's exit-2 routes, and asserting on it would
@@ -202,7 +217,15 @@ def main():
         print("working tree kept for inspection: %s" % work)
         return 1
 
-    shutil.rmtree(work, ignore_errors=True)
+    try:
+        shutil.rmtree(work)
+    except OSError as exc:
+        # PASSED is a statement about the picker and it has already been earned,
+        # so a tree that will not delete does not retract it. It does have to be
+        # said: ignore_errors=True left the workspace on disk under a clean
+        # verdict, with no path printed to find it by.
+        print("probe note: could not remove the working tree %s: %s"
+              % (work, exc), file=sys.stderr)
     print("SAVE-FAILURE PROBE PASSED (0 failures)")
     print("A failed save leaves the config byte-identical and strands no temp, so")
     print("the documented claim holds for the PICKER's exit codes. It is the")

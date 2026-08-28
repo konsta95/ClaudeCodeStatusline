@@ -207,7 +207,20 @@ def arm(label, carrier, picker, err=None, sendkeys=None, env=None,
         body = mutate(body, '   echo \\$RC > \\"$SENT.part\\"',
                       '   sleep %d; echo \\$RC > \\"$SENT.part\\"' % widen,
                       "sentinel publish step")
-    pre = "set +e\n"
+    # PATH is pinned rather than inherited, and the reason is narrower than it
+    # looks. Measured on tmux 3.6: a pane from `new-session` gets the CLIENT's
+    # PATH byte-identically -- this process's -- even when the server was
+    # already running and had been started by a client whose PATH resolved no
+    # watchdog, and even though PATH never appears in `show-environment -g`. So
+    # main()'s `shutil.which` preflight IS a statement about the pane here. It
+    # is one on EVERY tmux only if that propagation is universal, which is
+    # version-dependent and not a thing this lab can establish from inside a
+    # single machine. The export costs one line and removes the dependency: were
+    # a pane ever to inherit a server PATH with no watchdog, `TMO` would resolve
+    # empty, the bounded rewrite would land on a branch never taken, and F, F',
+    # F" and G would read the stub's exit code instead of `still-open` -- the
+    # lab exiting 1 for exactly the environment the preflight exists to catch.
+    pre = "set +e\nexport PATH=%s\n" % sh(os.environ.get("PATH", ""))
     for k, v in (env or {}).items():
         pre += "export %s=%s\n" % (k, sh(v))
     if sendkeys:
