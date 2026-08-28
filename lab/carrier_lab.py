@@ -67,7 +67,18 @@ def _sweep():
         print("note: could not remove the working tree %s: %s" % (WORK, exc),
               file=sys.stderr)
 
-md = open(DOC).read()
+try:
+    with open(DOC, encoding="utf-8") as fh:
+        md = fh.read()
+except OSError as exc:
+    # Runs at import, before main() and before the guard below, so an uncaught
+    # OSError here exits 1 -- the code this file reserves for an arm that
+    # genuinely disagreed with the carrier. A document that cannot be read is
+    # an environment that cannot pose the question.
+    print("lab error: could not read the carrier document %s: %s\nThe lab reads "
+          "the shipped text rather than a copy, so there is nothing to fall\nback "
+          "to." % (DOC, exc), file=sys.stderr)
+    sys.exit(2)
 m = re.search(r"```bash\n(PICKER=.*?)```", md, re.S)
 if not m:
     print("lab error: no carrier block in %s -- the lab reads the shipped text\n"

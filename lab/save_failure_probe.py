@@ -92,7 +92,19 @@ def main():
     with open(cfg, "w", encoding="utf-8") as fh:
         fh.write(before)
 
-    os.chmod(cfgdir, 0o555)
+    try:
+        os.chmod(cfgdir, 0o555)
+    except OSError as exc:
+        # A filesystem that will not take the mode cannot host the fixture, and
+        # an uncaught OSError here exits 1 -- "a real defect, do not retry" --
+        # for a question that was never asked. Same class as the witness check
+        # below, one step earlier: that one catches a mode that reports success
+        # without binding, this one a mode that will not be set at all.
+        print("probe error: could not make the config directory unwritable: %s\n"
+              "The fixture this probe rests on cannot be built here, so the "
+              "guarantee\ncannot be tested." % exc, file=sys.stderr)
+        return 2
+
     try:
         # Prove the fixture binds BEFORE building a result on it. chmod can
         # report success and still not take -- an ACL, a mount option, a
@@ -115,8 +127,17 @@ def main():
                                  keys=b"\r")
     finally:
         # Restored in a finally so a crash mid-probe does not leave an
-        # undeletable tree behind.
-        os.chmod(cfgdir, 0o755)
+        # undeletable tree behind. A failure to restore is reported and not
+        # raised: the measurement has already happened by this point, so
+        # letting it escape would turn a real answer into exit 1 -- and it
+        # would do so from inside a finally, replacing whatever the try block
+        # was already returning.
+        try:
+            os.chmod(cfgdir, 0o755)
+        except OSError as exc:
+            print("probe note: could not restore mode on %s: %s\nThe measurement "
+                  "above still stands; the tree may need removing by hand."
+                  % (cfgdir, exc), file=sys.stderr)
 
     with open(cfg, encoding="utf-8") as fh:
         after = fh.read()

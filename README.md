@@ -308,6 +308,12 @@ preflight therefore exercises those options against a throwaway session instead 
 compiled rather than what this server will accept, and the capability has been measured on
 exactly one tmux build — which is not enough to publish a bound.
 
+The same refusal covers the carrier document itself. The lab extracts the shell block from
+`commands/statusline.md` at *import* — before `main()`, and therefore before every guard
+`main()` installs — so a document that cannot be read raised straight through Python's
+blanket "uncaught exception exits `1`", reporting a carrier disagreement about a file it
+never opened. That read is now guarded and exits `2` naming the path.
+
 Failure paths were watched firing rather than assumed: breaking the carrier's reporting line
 in a throwaway copy of the repo produced `CARRIER LAB FAILED (9 arms disagreed)` and exit `1`,
 and removing a mutation anchor produced exit `2` — the lab refusing to build a control that
@@ -331,7 +337,11 @@ not bind for root, the save would succeed, and a pass measured that way would be
 refuses on a platform with no `os.geteuid` for the same reason, and before trusting any result
 it writes a witness file into the directory to confirm the mode actually took — `chmod` can
 report success and still not bind, and each way that happens ends in a green pass that measured
-nothing.
+nothing. A `chmod` the filesystem refuses outright is the other half of that, and exits `2` as
+well: it is not a picker defect that a mount will not take POSIX modes. So does a failure to
+restore the mode afterwards — except that one is only *reported*, because by then the
+measurement has already been made, and an exception from a `finally` does not travel beside the
+pending return, it replaces it.
 
 The exit code alone cannot carry this claim. The picker has **eight** routes to exit `2` and
 only one of them is the failed save — the other seven fire before `save_config` is reached.
