@@ -268,10 +268,14 @@ python3 lab/carrier_lab.py
 
 The exit-code lab covers what the picker does. This covers what the `/statusline` command does
 with it — the pane, the sentinel file, the bounded wait, and the classification of whatever
-comes back — across ten live tmux arms. The carrier under test is **extracted from
+comes back — across eleven live tmux arms. The carrier under test is **extracted from
 `commands/statusline.md`** rather than retyped, so a passing arm says something about the
-shipped text and not about a copy that drifted, and the three pre-fix controls are built by
-reverting one region each of that same extracted text.
+shipped text and not about a copy that drifted, and the four pre-fix controls are built by
+reverting one region each of that same extracted text. One region each is the part that has
+to be enforced rather than asserted: `F'` reverts the tail and `F"` reverts the cleanup
+guard, and only the second puts any weight on that guard at all — under the old tail the
+report is `missing`, so the fixed cleanup line deletes `$ERR` unaided and a control that
+reverted both regions at once would have proved nothing about either.
 
 Two of the arms are the same run reported twice. `F` holds a picker sleeping past the
 watchdog; `G` holds one that has already saved and exited, with the sentinel's publication
@@ -296,7 +300,10 @@ is the one that would survive.
 Failure paths were watched firing rather than assumed: breaking the carrier's reporting line
 in a throwaway copy of the repo produced `CARRIER LAB FAILED (9 arms disagreed)` and exit `1`,
 and removing a mutation anchor produced exit `2` — the lab refusing to build a control that
-would no longer revert what it names.
+would no longer revert what it names. An anchor that occurs *more* than once is refused the
+same way, because `str.replace` rewrites every occurrence: a control whose anchor quietly
+stopped being unique would revert more than it claims, which is no more use than reverting
+less.
 
 ### A failed save
 

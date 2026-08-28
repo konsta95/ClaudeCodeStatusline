@@ -17,10 +17,20 @@ text -- reverting one region each -- rather than by reading an old commit out of
 git. A history baseline stops being a known-bad the moment the fix merges; a
 mutation of current source does not.
 
-Two independent mutants, because the fixes live in two regions:
-  PRE_PANE  reverts the pane command  -> the setup guard and the quoting
-  PRE_TAIL  reverts the parent's tail -> pane liveness before cleanup
+Three independent mutants, one per region the fix touched:
+  PRE_PANE   reverts the pane command   -> the setup guard and the quoting
+  PRE_TAIL   reverts the parent's tail  -> pane liveness before cleanup
+  PRE_CLEAN  reverts the cleanup guard  -> $ERR survives a still-open pane
+
+One region each is a claim the controls have to earn, so every mutant reverts
+exactly one and mutate() refuses an anchor that is not unique. PRE_TAIL used to
+revert the cleanup guard as well. That overstated F' and, worse, left the
+cleanup fix with no control of its own: measured, the extra mutation was inert
+there, because under the old tail RC is `missing` and never `still-open`, so
+the FIXED cleanup line deletes $ERR unaided. Splitting it out is what makes the
+guard observable -- F" holds the pane open and watches $ERR vanish.
 """
+import atexit
 import os
 import re
 import shutil
@@ -34,6 +44,28 @@ REPO = os.path.dirname(HERE)
 DOC = os.path.join(REPO, "commands", "statusline.md")
 REAL = os.path.join(REPO, "statusline_picker.py")
 WORK = tempfile.mkdtemp(prefix="carrier-lab.")
+
+# Registered at import rather than at the end of main() so it also covers the
+# exit-2 refusals -- a missing anchor, an absent /proc, a tmux server that will
+# not start -- every one of which leaves through sys.exit and would otherwise
+# strand a tree under /tmp on each run.
+KEEP = []
+
+
+@atexit.register
+def _sweep():
+    if KEEP:
+        print("working tree kept for inspection: %s" % WORK)
+        return
+    try:
+        shutil.rmtree(WORK)
+    except OSError as exc:
+        # Reported, not escalated. The arms have already answered the question
+        # by the time this runs, so turning a clean verdict into an environment
+        # error because /tmp would not cooperate would be this lab's own
+        # failure mode pointed the other way.
+        print("note: could not remove the working tree %s: %s" % (WORK, exc),
+              file=sys.stderr)
 
 md = open(DOC).read()
 m = re.search(r"```bash\n(PICKER=.*?)```", md, re.S)
@@ -52,12 +84,20 @@ def mutate(text, anchor, replacement, what):
     what it names. That is a stale FIXTURE, not a failing arm, so it exits 2
     rather than 1: relaxing the match here would leave a control that always
     passes and proves nothing.
+
+    A DUPLICATED anchor is refused for the mirror-image reason. str.replace
+    rewrites every occurrence, so an anchor that quietly stops being unique
+    widens the control past the region it names, and a control that reverts
+    more than it claims is no more use than one that reverts less. The
+    exit-contract lab has always refused on a count other than 1; this one
+    checked only for presence.
     """
-    if anchor not in text:
-        print("lab error: mutation anchor missing (%s) -- the carrier changed "
-              "shape.\nUpdate the anchor; do NOT relax the match, or the control\n"
-              "silently stops being a control.\n\n%s" % (what, text),
-              file=sys.stderr)
+    n = text.count(anchor)
+    if n != 1:
+        print("lab error: the mutation anchor for %s occurs %d times, and a control "
+              "needs\nexactly 1 -- the carrier changed shape. Update the anchor; do "
+              "NOT relax the\nmatch, or the control silently stops being a control."
+              "\n\n%s" % (what, n, text), file=sys.stderr)
         sys.exit(2)
     return text.replace(anchor, replacement)
 
@@ -85,8 +125,8 @@ CLEAN_NEW = '[ "$RC" = still-open ] || rm -f "$SENT" "$SENT.part" "$ERR"'
 CLEAN_OLD = 'rm -f "$SENT" "$SENT.part" "$ERR"'
 
 PRE_PANE = mutate(FIXED, PANE_NEW, PANE_OLD, "pane command")
-PRE_TAIL = mutate(mutate(FIXED, TAIL_NEW, TAIL_OLD, "parent tail"),
-                  CLEAN_NEW, CLEAN_OLD, "conditional cleanup")
+PRE_TAIL = mutate(FIXED, TAIL_NEW, TAIL_OLD, "parent tail")
+PRE_CLEAN = mutate(FIXED, CLEAN_NEW, CLEAN_OLD, "conditional cleanup")
 
 
 def sh(s):
@@ -293,18 +333,30 @@ def main():
                         ["picker-exit=missing", "ERR_KEPT=no", "PANE_ALIVE=yes"],
                         arm("fp", PRE_TAIL, stub("plain/slow2.py", 3, "DIAGNOSTIC\n", sleep=8),
                             tmo=2, report_files=True)))
+    # The F scenario again with the OTHER region reverted, which is the only arm
+    # that puts any weight on the cleanup guard. F' cannot: its old tail reports
+    # missing, so `[ "$RC" = still-open ] ||` is false there and the fixed line
+    # deletes $ERR by itself. Here the tail is correct, so the report is
+    # still-open and the unconditional rm is the sole reason the diagnostic is
+    # gone -- destroyed in exactly the case it was written for.
+    results.append(show('F" old cleanup: still-open, but $ERR destroyed',
+                        ["picker-exit=still-open", "ERR_KEPT=no", "PANE_ALIVE=yes"],
+                        arm("fc", PRE_CLEAN, stub("plain/slow3.py", 3, "DIAGNOSTIC\n", sleep=8),
+                            tmo=2, report_files=True)))
 
-    print("\nA-G prove the fixed carrier does the right thing. C', D' and F' prove the")
-    print("arms discriminate: pre-fix, C loses the exit code, D publishes 1, and F")
-    print("reports missing while deleting the live pane's stderr file.")
+    print("\nA-G prove the fixed carrier does the right thing. C', D', F' and F\" prove")
+    print("the arms discriminate: pre-fix, C loses the exit code, D publishes 1, F")
+    print("reports missing while deleting the live pane's stderr file, and F\" keeps the")
+    print("report honest while deleting that file anyway.")
     bad = len([r for r in results if not r])
     print("---")
     print("CARRIER LAB %s (%d arms disagreed)"
           % ("PASSED" if not bad else "FAILED", bad))
     if bad:
         # Left in place on purpose: the arm's script, its captured output and
-        # the sentinel files are the evidence for what disagreed.
-        print("working tree kept for inspection: %s" % WORK)
+        # the sentinel files are the evidence for what disagreed. The sweep
+        # registered at import prints the path.
+        KEEP.append(True)
     return 0 if not bad else 1
 
 

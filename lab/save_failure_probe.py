@@ -47,7 +47,18 @@ def load_lab():
               "there is nothing\nto fall back to." % path, file=sys.stderr)
         sys.exit(2)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except OSError as exc:
+        # The None check above does NOT cover a missing file: for a path that
+        # does not exist, spec_from_file_location still hands back a spec with
+        # a perfectly good SourceFileLoader, and exec_module is where it
+        # finally raises. Uncaught, that is an exit 1 -- "a real defect, do not
+        # retry" -- for a file that simply is not there.
+        print("probe error: could not read %s: %s\nThe probe reuses its run_picker "
+              "rather than reimplementing a pty driver, so\nthere is nothing to fall "
+              "back to." % (path, exc), file=sys.stderr)
+        sys.exit(2)
     return mod
 
 
