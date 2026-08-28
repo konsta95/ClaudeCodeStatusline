@@ -260,6 +260,60 @@ def show(label, want, got, negate=False):
     return ok
 
 
+def tmux_capability_probe():
+    """Can the installed tmux actually run the carrier? Diagnostic, or None.
+
+    `shutil.which("tmux")` answers a different question than the one the arms
+    need. The carrier does not call tmux generically: it reads a pane id out of
+    `split-window -P -F`, and it tells a live pane from a dead one with
+    `list-panes -a -f` over a `#{==:...}` format comparison. A tmux that lacks
+    either fails INSIDE the pane, where nothing is checking a return code -- so
+    $PANE comes back empty or the liveness test matches nothing, the arm reports
+    `missing`, and the lab exits 1 for an environment that was never able to
+    answer. That is the same confident-wrong-answer the /proc and new-session
+    guards close, arriving through a third door.
+
+    So the probe exercises the options rather than parsing `tmux -V`: a version
+    string says what was compiled, not what this server will accept.
+    """
+    sess = "carrier-lab-probe-%d" % os.getpid()
+    chan = "carrier-lab-chan-%d" % os.getpid()
+
+    def tm(*args):
+        return subprocess.run(("tmux",) + args, capture_output=True, text=True,
+                              timeout=15)
+
+    try:
+        tm("kill-session", "-t", sess)
+        r = tm("new-session", "-d", "-s", sess, "-x", "80", "-y", "24", "sleep 30")
+        if r.returncode != 0:
+            return "tmux would not start a session (rc=%d): %s" % (
+                r.returncode, (r.stderr or "").strip())
+        try:
+            p = tm("split-window", "-t", sess, "-P", "-F", "#{pane_id}", "sleep 30")
+            pane = (p.stdout or "").strip()
+            if p.returncode != 0 or not pane.startswith("%"):
+                return ("tmux split-window -P -F did not return a pane id (rc=%d, "
+                        "got %r): %s" % (p.returncode, pane,
+                                         (p.stderr or "").strip()))
+            q = tm("list-panes", "-a", "-f", "#{==:#{pane_id},%s}" % pane,
+                   "-F", "#{pane_id}")
+            if q.returncode != 0 or (q.stdout or "").strip() != pane:
+                return ("tmux list-panes -a -f '#{==:...}' did not match a pane "
+                        "that is alive (rc=%d, got %r): %s"
+                        % (q.returncode, (q.stdout or "").strip(),
+                           (q.stderr or "").strip()))
+            w = tm("wait-for", "-S", chan)
+            if w.returncode != 0:
+                return "tmux wait-for -S failed (rc=%d): %s" % (
+                    w.returncode, (w.stderr or "").strip())
+        finally:
+            tm("kill-session", "-t", sess)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return "the tmux capability probe did not complete: %s" % exc
+    return None
+
+
 def main():
     if not shutil.which("tmux"):
         print("lab error: tmux is required -- every arm opens a real pane, and a "
@@ -278,6 +332,15 @@ def main():
               "tell a live\nPICKER from a live PANE by reading /proc/<pid>/cmdline; "
               "without it F reports a\ndefect that is not there and G passes for the "
               "wrong reason.", file=sys.stderr)
+        return 2
+    why = tmux_capability_probe()
+    if why is not None:
+        print("lab error: this tmux cannot run the carrier, so no arm here would be\n"
+              "measuring the carrier.\n  %s\nThe carrier needs split-window -P -F to "
+              "hand back a pane id and list-panes\n-a -f with a #{==:...} comparison to "
+              "tell a live pane from a dead one.\nWithout them an arm reports missing "
+              "and the lab would exit 1, blaming the\ncarrier for the environment."
+              % why, file=sys.stderr)
         return 2
 
     results = []

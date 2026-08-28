@@ -297,6 +297,17 @@ running" to every question, so `F` reports a defect that is not there — loud, 
 chase it — while `G` passes for a reason with nothing to do with what it tests. The quiet one
 is the one that would survive.
 
+It refuses on an unusable **tmux** for the same reason. Whether a `tmux` binary exists is a
+different question from the one the arms need answered: the carrier reads a pane id out of
+`split-window -P -F`, and tells a live pane from a dead one with `list-panes -a -f` over a
+`#{==:…}` format comparison. A tmux lacking either fails *inside* the pane, where nothing is
+checking a return code — so `$PANE` comes back empty or the liveness test matches nothing, the
+arm reports `missing`, and the lab exits `1`, blaming the carrier for the environment. The
+preflight therefore exercises those options against a throwaway session instead of parsing
+`tmux -V`. No minimum version is published here on purpose: a version string says what was
+compiled rather than what this server will accept, and the capability has been measured on
+exactly one tmux build — which is not enough to publish a bound.
+
 Failure paths were watched firing rather than assumed: breaking the carrier's reporting line
 in a throwaway copy of the repo produced `CARRIER LAB FAILED (9 arms disagreed)` and exit `1`,
 and removing a mutation anchor produced exit `2` — the lab refusing to build a control that
