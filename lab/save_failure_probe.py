@@ -16,7 +16,13 @@ comparison afterwards.
     python3 lab/save_failure_probe.py
 
 Exit codes: 0 the guarantee held, 1 it did not (a real defect -- read the
-output, do not retry), 2 the environment cannot answer the question.
+output, do not retry), 2 the environment cannot answer the question. That last
+one covers more than it looks: the picker has EIGHT routes to exit 2 and only
+one of them is the failed save -- the other seven fire before `save_config` is
+reached -- so a run that died on a missing node or an absent tty also arrives
+here with the config untouched and no temp stranded, which is
+indistinguishable from a clean pass on every other check this probe makes. It is
+the save-specific diagnostic that tells the two apart.
 
 Reuses `lab/exit_contract_lab.py`'s run_picker rather than reimplementing a pty
 driver, so the probe and the lab agree on how the picker is driven.
@@ -46,6 +52,17 @@ def load_lab():
 
 
 def main():
+    if not hasattr(os, "geteuid"):
+        # Windows. Not merely an unavailable API to route around: mode 0o555
+        # does not make a directory unwritable there either, so the fixture this
+        # probe is built on has no meaning on the platform. Calling geteuid
+        # anyway would raise AttributeError and exit 1 -- "a real defect" -- for
+        # what is only an unanswerable question.
+        print("probe error: this platform has no os.geteuid. The unwritable-directory "
+              "fixture\nthis probe depends on does not bind here either, so the "
+              "question cannot be\nasked, let alone answered.", file=sys.stderr)
+        return 2
+
     if os.geteuid() == 0:
         # Mode 0o555 does not bind at uid 0, so the save would SUCCEED and the
         # probe would report a pass it never measured. Refusing is the only
@@ -66,6 +83,23 @@ def main():
 
     os.chmod(cfgdir, 0o555)
     try:
+        # Prove the fixture binds BEFORE building a result on it. chmod can
+        # report success and still not take -- an ACL, a mount option, a
+        # filesystem with no POSIX modes -- and every one of those lets the save
+        # SUCCEED while all three checks below still read green. Testing the
+        # instrument is cheaper than explaining a vacuous pass later.
+        witness = os.path.join(cfgdir, ".fixture-witness")
+        try:
+            open(witness, "w").close()
+        except OSError:
+            pass  # what the fixture is supposed to do
+        else:
+            os.unlink(witness)
+            print("probe error: the config directory is still writable at mode 0o555, "
+                  "so the save\nwould succeed and this probe would report a guarantee "
+                  "it never tested.", file=sys.stderr)
+            return 2
+
         rc, out = lab.run_picker(os.path.join(REPO, "statusline_picker.py"), cfg,
                                  keys=b"\r")
     finally:
@@ -76,14 +110,33 @@ def main():
     with open(cfg, encoding="utf-8") as fh:
         after = fh.read()
     stranded = sorted(f for f in os.listdir(cfgdir) if f != os.path.basename(cfg))
+    # Two predicates on purpose. The loose one is what a human wants to read;
+    # the strict one is the assertion. They are not interchangeable: "error"
+    # matches all eight of the picker's exit-2 routes, and asserting on it would
+    # rebuild the exact hole this closes.
     diagnostic = next((l for l in out.splitlines()
                        if "could not save" in l or "error" in l), "(none)")
+    reached_save = any("could not save" in l for l in out.splitlines())
 
     print("rc                                : %s   (2 = environment error, the "
           "documented save failure)" % rc)
     print("stderr                            : %s" % diagnostic.strip()[:110])
+    print("the save was actually attempted   : %s" % reached_save)
     print("config byte-identical afterwards  : %s" % (after == before))
     print("temp files stranded beside it     : %r" % stranded)
+
+    if rc == 2 and not reached_save:
+        # Environment, not defect. save_config never ran, so returning 1 here
+        # would report "a real defect -- do not retry" for a missing node.
+        print("---")
+        print("probe error: the picker exited 2 with no 'could not save' diagnostic, "
+              "so it failed\nBEFORE reaching the save -- no node, no renderer, no tty, "
+              "no termios, a config\nthat would not load. Every one of those leaves the "
+              "config untouched and strands\nno temp, which is precisely what a clean "
+              "pass looks like from out here. This run\nmeasured nothing about a failed "
+              "save.", file=sys.stderr)
+        print("working tree kept for inspection: %s" % work)
+        return 2
 
     failures = []
     if rc != 2:

@@ -285,6 +285,14 @@ would otherwise read as still running, and it matches the exact picker path rath
 pattern, because the pane's own shell carries that path in its command line — a `pgrep -f`
 test reports the picker alive in every arm, forever.
 
+That precision is also what makes this lab **Linux-only**. It reads `/proc/<pid>/cmdline`, and
+the portable substitute — `ps -o args=` — joins argv with spaces, which the exact match cannot
+survive. Where `/proc` is missing the lab therefore refuses with exit `2` instead of degrading.
+Degrading is the worse option, and not symmetrically: without `/proc` the probe answers "not
+running" to every question, so `F` reports a defect that is not there — loud, and someone will
+chase it — while `G` passes for a reason with nothing to do with what it tests. The quiet one
+is the one that would survive.
+
 Failure paths were watched firing rather than assumed: breaking the carrier's reporting line
 in a throwaway copy of the repo produced `CARRIER LAB FAILED (9 arms disagreed)` and exit `1`,
 and removing a mutation anchor produced exit `2` — the lab refusing to build a control that
@@ -301,7 +309,19 @@ of the four non-zero codes never reach the save path at all, so the whole claim 
 which is what a failed save exits with. This drives the real picker over a pty against a
 read-only config directory and checks the config byte-for-byte afterwards, along with the
 directory it writes its temp into. It refuses to report at all under `sudo`: mode `0o555` does
-not bind for root, the save would succeed, and a pass measured that way would be vacuous.
+not bind for root, the save would succeed, and a pass measured that way would be vacuous. It
+refuses on a platform with no `os.geteuid` for the same reason, and before trusting any result
+it writes a witness file into the directory to confirm the mode actually took — `chmod` can
+report success and still not bind, and each way that happens ends in a green pass that measured
+nothing.
+
+The exit code alone cannot carry this claim. The picker has **eight** routes to exit `2` and
+only one of them is the failed save — the other seven fire before `save_config` is reached.
+A missing `node`, an absent tty, a config that will not load all
+arrive with the config untouched and no temp stranded — precisely the footprint of a clean
+pass. So the probe also requires the save-specific `could not save` diagnostic, and when `2`
+arrives without it the probe returns `2` rather than `1`: a picker that never reached the save
+leaves the question unanswered, which is not the same as the guarantee being broken.
 
 ## Status
 

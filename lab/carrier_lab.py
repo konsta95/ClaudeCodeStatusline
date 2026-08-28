@@ -182,8 +182,21 @@ def arm(label, carrier, picker, err=None, sendkeys=None, env=None,
     # another's pane mid-arm and report the failure against the wrong lab.
     sess = "carrier-lab-%d-%s" % (os.getpid(), label)
     subprocess.run(["tmux", "kill-session", "-t", sess], capture_output=True)
-    subprocess.run(["tmux", "new-session", "-d", "-s", sess, "-x", "200", "-y", "50",
-                    "bash %s > %s/out 2>&1" % (sh(script), d)], check=True)
+    started = subprocess.run(["tmux", "new-session", "-d", "-s", sess, "-x", "200",
+                              "-y", "50",
+                              "bash %s > %s/out 2>&1" % (sh(script), d)],
+                             capture_output=True, text=True)
+    if started.returncode != 0:
+        # main() already established tmux is on PATH, so this is the server
+        # refusing a session, not a missing binary -- an environment problem
+        # either way. check=True raised CalledProcessError here, and an uncaught
+        # exception exits 1, which this file reserves for an arm that genuinely
+        # disagreed with the carrier.
+        print("lab error: tmux would not start a session for arm %s (rc=%d). Every arm "
+              "needs a\nreal pane, so there is nothing to fall back to.\n%s"
+              % (label, started.returncode, (started.stderr or "").strip()),
+              file=sys.stderr)
+        sys.exit(2)
     for _ in range(600):
         if os.path.exists(os.path.join(d, "done")):
             break
@@ -211,6 +224,20 @@ def main():
     if not shutil.which("tmux"):
         print("lab error: tmux is required -- every arm opens a real pane, and a "
               "simulated one\nwould test the simulation.", file=sys.stderr)
+        return 2
+    if not os.access("/proc/self/cmdline", os.R_OK):
+        # Refused rather than degraded, and refused for BOTH arms rather than
+        # skipped for one. Without /proc the liveness probe answers "no" to
+        # every question: F then reports a defect that is not there, and G
+        # passes for a reason that has nothing to do with what it tests. A
+        # vacuous pass is the worse of the two, and it is the one that would go
+        # unnoticed. There is no lossless substitute either -- `ps -o args=`
+        # joins argv with spaces, which cannot survive the exact-match test
+        # these arms rest on.
+        print("lab error: /proc is required (this is a Linux-only lab). Arms F and G "
+              "tell a live\nPICKER from a live PANE by reading /proc/<pid>/cmdline; "
+              "without it F reports a\ndefect that is not there and G passes for the "
+              "wrong reason.", file=sys.stderr)
         return 2
 
     results = []
