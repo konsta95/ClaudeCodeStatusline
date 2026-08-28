@@ -179,8 +179,17 @@ Each block below re-states the path rather than reusing `$PICKER`. That is not r
 every block runs in its own shell, so a variable set in one is unset in the next, and
 `python3 $PICKER --show` would silently become `python3 --show`.
 
-Nothing was written for any code other than `0`. `3` in particular leaves the config untouched:
-it is a cancel that carries a reason.
+Nothing was written for any **picker exit code** other than `0`. `3` in particular leaves the
+config untouched: it is a cancel that carries a reason. `2` covers a save that failed, and that
+also leaves the old file intact — the picker writes through a unique temp name in the target
+directory and renames over the config, so a failed save unlinks its temp and the config never
+changes. Measured, with a read-only config directory: `rc=2`, the config byte-identical
+afterwards, and no temp file stranded beside it.
+
+The three carrier values are not picker exit codes and carry no such guarantee. `still-open`,
+`missing` and `unclassified:[…]` all mean the same thing — the picker's exit code never reached
+you — and a picker can save and then die, or save and not yet have published. Never read them as
+"nothing was written". Read the live state with `--show`.
 
 Cancel has its own code because the pane's stdout never reaches you — the exit code is the only
 channel out, and if cancel shared `0` with a save you would report a save that never happened.
