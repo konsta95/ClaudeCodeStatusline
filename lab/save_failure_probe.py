@@ -84,13 +84,26 @@ def main():
         return 2
 
     lab = load_lab()
-    work = tempfile.mkdtemp(prefix="save-failure-probe.")
-    cfgdir = os.path.join(work, "cfg")
-    os.mkdir(cfgdir)
-    cfg = os.path.join(cfgdir, "statusline-config.json")
-    before = json.dumps({"items": ["model", "cwd"], "colors": True}, indent=1) + "\n"
-    with open(cfg, "w", encoding="utf-8") as fh:
-        fh.write(before)
+    work = None
+    try:
+        work = tempfile.mkdtemp(prefix="save-failure-probe.")
+        cfgdir = os.path.join(work, "cfg")
+        os.mkdir(cfgdir)
+        cfg = os.path.join(cfgdir, "statusline-config.json")
+        before = json.dumps({"items": ["model", "cwd"], "colors": True},
+                            indent=1) + "\n"
+        with open(cfg, "w", encoding="utf-8") as fh:
+            fh.write(before)
+    except OSError as exc:
+        # No picker has run at this point, so nothing has been measured. An
+        # uncaught OSError from a full or read-only /tmp would still exit 1 and
+        # name the picker as the culprit.
+        print("probe error: could not build the probe workspace: %s\nThe fixture "
+              "is a real directory with a real config in it, so there is\nnothing "
+              "to fall back to." % exc, file=sys.stderr)
+        if work is not None:
+            print("working tree kept for inspection: %s" % work)
+        return 2
 
     try:
         os.chmod(cfgdir, 0o555)
@@ -103,6 +116,7 @@ def main():
         print("probe error: could not make the config directory unwritable: %s\n"
               "The fixture this probe rests on cannot be built here, so the "
               "guarantee\ncannot be tested." % exc, file=sys.stderr)
+        print("working tree kept for inspection: %s" % work)
         return 2
 
     try:
@@ -121,6 +135,7 @@ def main():
             print("probe error: the config directory is still writable at mode 0o555, "
                   "so the save\nwould succeed and this probe would report a guarantee "
                   "it never tested.", file=sys.stderr)
+            print("working tree kept for inspection: %s" % work)
             return 2
 
         rc, out = lab.run_picker(os.path.join(REPO, "statusline_picker.py"), cfg,

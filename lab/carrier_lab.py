@@ -43,7 +43,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DOC = os.path.join(REPO, "commands", "statusline.md")
 REAL = os.path.join(REPO, "statusline_picker.py")
-WORK = tempfile.mkdtemp(prefix="carrier-lab.")
+try:
+    WORK = tempfile.mkdtemp(prefix="carrier-lab.")
+except OSError as exc:
+    # Also import-time, also ahead of every guard main() installs. A /tmp that
+    # is full, missing or read-only is an environment, not an arm that
+    # disagreed -- and this one fails before there is any working tree for the
+    # sweep below to report, which is why it exits here rather than deferring.
+    print("lab error: could not create the working tree: %s\nEvery arm writes its "
+          "stub, its captured output and its sentinel files there,\nso there is "
+          "nothing to fall back to." % exc, file=sys.stderr)
+    sys.exit(2)
 
 # Registered at import rather than at the end of main() so it also covers the
 # exit-2 refusals -- a missing anchor, an absent /proc, a tmux server that will
@@ -352,6 +362,28 @@ def main():
               "tell a live pane from a dead one.\nWithout them an arm reports missing "
               "and the lab would exit 1, blaming the\ncarrier for the environment."
               % why, file=sys.stderr)
+        return 2
+
+    if not (shutil.which("timeout") or shutil.which("gtimeout")):
+        # The carrier itself does NOT need these -- `TMO` empty is a supported
+        # state, and it falls back to an unbounded `tmux wait-for`. That
+        # fallback is deliberate, because macOS ships neither. It is the four
+        # BOUNDED arms that need them: F, F', F" and G rewrite the carrier's
+        # `"$TMO" 900 tmux` to a 2-second bound and then require the bound to
+        # fire while the pane is still alive. With `TMO` empty the rewrite
+        # lands on a branch that is never taken, the wait blocks until the stub
+        # finishes on its own, and the arm reads back the stub's exit code
+        # instead of `still-open` -- so four arms disagree and the lab exits 1
+        # for an environment that was never able to hold the question.
+        print("lab error: neither `timeout` nor `gtimeout` is on PATH. The carrier "
+              "tolerates\nthat and waits unbounded, but arms F, F', F\" and G exist to "
+              "watch the BOUND\nfire while the pane is still alive, and they rewrite "
+              "the carrier's own\n`\"$TMO\" 900 tmux` to do it. With TMO empty that "
+              "branch is never taken: the\nwait runs to completion, the arms read the "
+              "stub's exit code instead of\n`still-open`, and the lab would exit 1 "
+              "blaming the carrier for the\nenvironment. On macOS: `brew install "
+              "coreutils` provides `gtimeout`.",
+              file=sys.stderr)
         return 2
 
     results = []

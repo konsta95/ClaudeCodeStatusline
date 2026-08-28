@@ -308,6 +308,16 @@ preflight therefore exercises those options against a throwaway session instead 
 compiled rather than what this server will accept, and the capability has been measured on
 exactly one tmux build — which is not enough to publish a bound.
 
+It also requires **`timeout` or `gtimeout`** on `PATH`, and refuses with exit `2` without
+them — which is a prerequisite of the *lab*, not of the carrier. The carrier tolerates their
+absence by design and falls back to an unbounded `tmux wait-for`, because macOS ships neither.
+But arms `F`, `F'`, `F"` and `G` exist to watch the **bound** fire while the pane is still
+alive, and they do it by rewriting the carrier's own `"$TMO" 900 tmux` down to two seconds.
+With `TMO` empty that rewrite lands on a branch which is never taken: the wait runs to
+completion, the arms read back the stub's exit code instead of `still-open`, and four arms
+disagree — reported as exit `1`, a carrier defect, for a missing coreutils. `brew install
+coreutils` provides `gtimeout`.
+
 The same refusal covers the carrier document itself. The lab extracts the shell block from
 `commands/statusline.md` at *import* — before `main()`, and therefore before every guard
 `main()` installs — so a document that cannot be read raised straight through Python's
