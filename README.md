@@ -124,10 +124,11 @@ name and the outcome reads as unknown — rather than a truncated `127` arriving
 wrong `1`. The pane also pre-flights its stderr file before launching, because a shell that
 cannot open a redirect never runs the command and exits `1` on its own — which would report the
 picker as defective for a failure that happened before it started. And when the watchdog expires
-the command asks tmux whether the pane is still there before saying anything: a human who is
-simply taking their time is still working in a live pane, so the command reports that the picker
-is open, leaves the pane and its files alone, and does not manufacture an outcome the picker has
-not produced yet.
+the command asks tmux whether the pane is still there before saying anything: a live pane usually
+means a human taking their time, so the command says the picker is still open, leaves the pane and
+its files alone, and does not manufacture a result. It is careful not to claim more than that — a
+live pane proves the pane exists and nothing else, since a picker that has just written your
+config and is a step away from publishing its exit code looks identical from outside.
 
 Requires tmux. Without it the command shows your current bar and prints the line to run in your
 own terminal, rather than opening a pane somewhere you cannot see.
