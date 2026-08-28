@@ -123,7 +123,11 @@ rather than written in place, so a pane that dies mid-write strands its fragment
 name and the outcome reads as unknown — rather than a truncated `127` arriving as a confident,
 wrong `1`. The pane also pre-flights its stderr file before launching, because a shell that
 cannot open a redirect never runs the command and exits `1` on its own — which would report the
-picker as defective for a failure that happened before it started.
+picker as defective for a failure that happened before it started. And when the watchdog expires
+the command asks tmux whether the pane is still there before saying anything: a human who is
+simply taking their time is still working in a live pane, so the command reports that the picker
+is open, leaves the pane and its files alone, and does not manufacture an outcome the picker has
+not produced yet.
 
 Requires tmux. Without it the command shows your current bar and prints the line to run in your
 own terminal, rather than opening a pane somewhere you cannot see.

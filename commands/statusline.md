@@ -30,21 +30,23 @@ CHAN="statusline-picker-$$"
 SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
 rm -f "$SENT" "$SENT.part" "$ERR"
 TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither by default
-tmux split-window -v -b -l 16 \
+PANE=$(tmux split-window -v -b -l 16 -P -F '#{pane_id}' \
   "if : 2>>\"$ERR\" && exec 9>>\"$ERR\"; then python3 \"$PICKER\" 2>&9; RC=\$?; else RC=setup; fi
-   echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN" \
+   echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN") \
   && if [ -n "$TMO" ]; then "$TMO" 900 tmux wait-for "$CHAN"
      else tmux wait-for "$CHAN"; fi
 
-if [ ! -f "$SENT" ]; then
-  RC=missing
-else
+if [ -f "$SENT" ]; then
   RC=$(cat "$SENT")
   case "$RC" in 0|1|2|3|4) ;; *) RC="unclassified:[$RC]" ;; esac
+elif [ -n "$(tmux list-panes -a -f "#{==:#{pane_id},$PANE}" -F '#{pane_id}' 2>/dev/null)" ]; then
+  RC=still-open
+else
+  RC=missing
 fi
 echo "picker-exit=$RC"
 [ -s "$ERR" ] && { echo "picker-stderr:"; cat "$ERR"; }
-rm -f "$SENT" "$SENT.part" "$ERR"
+[ "$RC" = still-open ] || rm -f "$SENT" "$SENT.part" "$ERR"
 ```
 
 `-v -b` stacks the pane ABOVE the session and `-l 16` gives it the ~14 lines it needs; a
@@ -71,6 +73,22 @@ The consequences, each load-bearing:
 
 - **The `timeout` is not decoration.** A pane killed, closed, or lost to a tmux server restart
   signals nothing, and a bare `tmux wait-for` then blocks forever.
+- **The `timeout` bounds the wait, not the pane.** When it fires, the picker is usually still
+  running — a human who walked away mid-edit. The pane is not killed, because killing it would
+  destroy toggles they have not saved. But that makes the cleanup conditional: `rm -f` must not
+  run while the pane is alive. Measured on the pre-fix text, with the bound shortened so the path
+  was observable: the parent reported `missing` and deleted the files, the pane went on to exit
+  `3` and recreate `$SENT` as litter, and `$ERR` was unlinked while the pane still held fd 9 open,
+  so the picker's diagnostic was written into an unreachable inode and lost. The pane id from
+  `split-window -P` is what separates the two cases, and a live pane reports `still-open` rather
+  than `missing` — the difference between "I do not know" and "it has not finished".
+
+  The liveness check has to be `list-panes` with a filter, and that is measured too, because the
+  obvious check is wrong. `tmux display-message -p -t "$PANE"` returns 0 for a pane that has
+  already died AND for an empty `$PANE` — it silently falls back to the current pane — so it
+  would report `still-open` every time, including after a failed split. A bare membership test
+  against `list-panes` output has the same flaw for the empty case. The filter form returns
+  nothing for a dead id, an empty id, and a bogus id alike.
 - **The `timeout` is also not guaranteed to exist.** Base macOS ships no `timeout`; Homebrew's
   coreutils installs it as `gtimeout`, and someone who got tmux from Homebrew need not have
   coreutils at all. `command -v` picks whichever is present, and the `[ -n "$TMO" ]` branch drops
@@ -145,7 +163,8 @@ promoted.
 | `3` | the human pressed `v` | hand off — see below |
 | `2` | environment or usage error | report the captured `picker-stderr:` block verbatim; do not paper over it |
 | `1` | selftest failures | a real defect in the picker; report it, do not retry |
-| `missing` | no sentinel file — the pane died before it could report, or died mid-write and its fragment was never promoted off `.part` | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
+| `still-open` | the bounded wait expired but the pane is alive — the human is still in the picker | not a result at all, so do not report one. Say the picker is still open above them; nothing has been written yet and nothing was cleaned up. It finishes on its own |
+| `missing` | no sentinel file and no pane — it died before it could report, or died mid-write and its fragment was never promoted off `.part` | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
 | `unclassified:[…]` | sentinel exists and is complete, but holds something else | also UNKNOWN. Two values are known: `setup` means the pane could not open `$ERR` and the picker never started; `127` means the pane shell had no `python3`. Anything else is genuinely unattributed — the picker may never have run, or may have been killed part-way, which is where a shell's signal statuses like `130` (SIGINT) or `143` (SIGTERM) come from. Do not say which. Report the raw value and read the live state with `--show` |
 
 Each block below re-states the path rather than reusing `$PICKER`. That is not redundancy —
