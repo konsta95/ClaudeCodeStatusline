@@ -659,6 +659,19 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
+    # Probed here rather than left to the lazy import in read_keys_tty: an
+    # ImportError there escapes main() and Python exits 1, which this tool
+    # documents as "selftest failures -- a real defect, do not retry". A
+    # platform without termios is neither a defect nor un-retryable, so it
+    # has to reach the environment code instead.
+    try:
+        import termios  # noqa: F401
+    except ImportError:
+        print("error: the interactive picker needs a POSIX terminal (termios); "
+              "this platform has none. --show and --selftest work anywhere; "
+              "on Windows, run it under WSL.", file=sys.stderr)
+        sys.exit(2)
+
     try:
         registry = fetch_registry(node, args.js)
     except RuntimeError as exc:
@@ -701,7 +714,17 @@ def main():
             shutil.rmtree(sandbox, ignore_errors=True)
     sys.stdout.write("\x1b[2J\x1b[H")
     if outcome == "saved":
-        save_config(args.config, state.enabled, state.colors)
+        # save_config re-raises after cleaning up its temp file, and an
+        # uncaught OSError here would exit 1 -- the code reserved for a picker
+        # defect that must not be retried. A full disk or a read-only config
+        # directory is the opposite: environmental, and retrying after fixing
+        # it is exactly right. So it has to land on 2.
+        try:
+            save_config(args.config, state.enabled, state.colors)
+        except OSError as exc:
+            print("error: could not save %s: %s" % (args.config, exc),
+                  file=sys.stderr)
+            sys.exit(2)
         print("saved %s" % args.config)
         print("items:  %s" % (", ".join(state.enabled) or "(none -- empty line)"))
         print("colors: %s" % ("on" if state.colors else "off"))

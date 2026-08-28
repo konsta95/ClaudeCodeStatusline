@@ -38,6 +38,13 @@ a fix. A built-in picker would need neither.
 
 Requires Node.js and Python 3. No dependencies, no build step, no network access.
 
+**Platforms.** Linux and macOS. The interactive picker needs a POSIX terminal — it puts the
+tty in raw mode through `termios` — so on Windows use WSL; `--show` and `--selftest` run
+anywhere, and a Windows launch exits `2` with that explanation rather than a traceback. The
+`/statusline` command additionally wants `tmux`, and its watchdog wants GNU `timeout`, which
+base macOS does not ship: install coreutils (Homebrew names it `gtimeout`) and the command
+finds either. Without one it still runs, but the wait for the pane is then unbounded.
+
 ```bash
 git clone https://github.com/konsta95/claude-code-statusline-picker
 cd claude-code-statusline-picker
@@ -91,8 +98,10 @@ opened it — so the exit code is the only channel out, and a shared `0` would l
 ## Use it from inside Claude Code
 
 `commands/statusline.md` is a slash command that opens the picker in a tmux pane above your
-session. Copy it to `~/.claude/commands/statusline.md` and set the `PICKER` path at the top to
-your clone. A user command shadows the built-in of the same name, so `/statusline` reaches it.
+session. Copy it to `~/.claude/commands/statusline.md`. It assumes the clone lives at
+`~/claude-code-statusline-picker`; if yours does not, change the path in every block of that
+file, since each runs in its own shell and none inherits from another. A user command shadows
+the built-in of the same name, so `/statusline` reaches it.
 
 ```bash
 mkdir -p ~/.claude/commands
@@ -109,7 +118,18 @@ pane *exists*, not when its command finishes, so the picker's exit code needs a 
 plus `tmux wait-for` to reach the caller at all. That carrier was verified against controlled
 arms — including the case where the human quits instantly and the signal beats the wait, and a
 known-bad arm with no `wait-for` that loses the code entirely. The command documents both, and
-the guards against the pane dying without ever signalling.
+the guards against the pane dying without ever signalling. The sentinel is *published* by rename
+rather than written in place, so a pane that dies mid-write strands its fragment under a `.part`
+name and the outcome reads as unknown — rather than a truncated `127` arriving as a confident,
+wrong `1`. The pane also pre-flights its stderr file before launching, because a shell that
+cannot open a redirect never runs the command and exits `1` on its own — which would report the
+picker as defective for a failure that happened before it started. And when the watchdog expires
+the command asks tmux whether the pane is still there before saying anything: a live pane usually
+means a human taking their time, so the command reports the pane rather than an outcome, leaves it
+and its files alone, and does not manufacture a result. It is careful not to claim more than that —
+a live pane proves the pane exists and nothing else, not even that the picker is still running,
+since a picker that has just written your config and is a step away from publishing its exit code
+looks identical from outside.
 
 Requires tmux. Without it the command shows your current bar and prints the line to run in your
 own terminal, rather than opening a pane somewhere you cannot see.
@@ -215,6 +235,30 @@ there. The pre-fix log was captured when the lab still ran out of a volatile scr
 directory, so its two redactions (`SCRATCH-REDACTED`) covered a path carrying a session
 UUID; the lab now scratches inside the repo, so the post-fix log's two redactions
 (`REPO-REDACTED`) cover only a checkout path and it contains no identifiers at all.
+
+### The exit-code contract
+
+```bash
+python3 lab/exit_contract_lab.py
+```
+
+Exit `1` means *a defect in the picker — do not retry*; exit `2` means *an environment problem
+you can fix*. They carry opposite instructions, and any uncaught exception in `main()` exits
+`1` — so every environmental failure that escapes uncaught is silently relabelled as a
+permanent defect. This lab pins the two places that happened: a save the filesystem refuses,
+and a platform with no `termios`.
+
+It generates its own known-bad by **mutating the current source** — deleting the guard under
+test — rather than by checking out an older revision, because a history-based baseline stops
+being a known-bad the moment the fix merges. Each mutation asserts its anchor appears exactly
+once and aborts if it does not, so a refactor that moves a guard breaks this lab loudly
+instead of letting it pass while measuring nothing.
+
+The unsavable-directory fixture is built from `ENOTDIR` — a regular file used as the config's
+parent — and not from a `0o555` mode. Permission bits are discretionary and root ignores them,
+so under `sudo` the mode-based fixture would let both arms save happily, and the lab would
+report failures that say nothing about the picker. A precondition proves the fixture is
+genuinely unsavable before any arm is read.
 
 ## Status
 
