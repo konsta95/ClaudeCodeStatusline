@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+reviews:
+  auto_review:
+    # Measured 2026-08-29: automatic review paused at the FIRST commit of both PR #2
+    # and PR #3, ~45s after each was opened -- not after the documented default of 5.
+    # The trigger is still unexplained (repo task #4); this key is set explicitly so the
+    # value lives in the repository instead of in a dashboard nobody here can read.
+    # 25 is headroom over the largest PR this repo has had (9 commits), not a derived
+    # bound. 0 would disable the pause entirely, at a documented cost to the review
+    # rate limit, so the safety valve is kept.
+    auto_pause_after_reviewed_commits: 25
