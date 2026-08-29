@@ -60,6 +60,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HOME = os.path.expanduser("~")
 
@@ -226,20 +227,78 @@ def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None):
             pass
 
 
+def probe_age(path, now=None):
+    """Seconds since PATH was last written, or None when that cannot be read.
+
+    None is not zero and must never be rendered as one: an unreadable mtime is
+    an unknown, and every caller here names it as such rather than defaulting."""
+    try:
+        return (time.time() if now is None else now) - os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def format_age(seconds):
+    """Coarse duration, one unit, largest that fits. Deliberately imprecise --
+    the mtime answers 'how stale', not 'how long exactly', and a padded string
+    would imply a resolution the question does not have."""
+    whole = max(0, int(seconds))
+    if whole < 60:
+        return "%ds" % whole
+    if whole < 3600:
+        return "%dm" % (whole // 60)
+    if whole < 86400:
+        return "%dh" % (whole // 3600)
+    return "%dd" % (whole // 86400)
+
+
+def payload_label(live_path, age, elapsed):
+    """What the preview was rendered FROM, in one phrase. Pure: no clock, no I/O.
+
+    Contract, from owner decision fe3c4f4d57ce -- report the age, set no
+    threshold. Nothing here rejects a probe, falls back off one, or warns about
+    one. A stale probe still previews; it is only named.
+
+    'live' is not a freshness guess and rests on no constant. It means the probe
+    was rewritten after this picker started, which is why ELAPSED is the picker's
+    own age rather than a tolerance: a Claude Code session refreshing its status
+    line rewrites the probe, so a probe that moves under a running picker has a
+    producer behind it at that moment. A one-shot caller passes elapsed=0 and can
+    therefore never print 'live' -- by construction, not by a rule about it."""
+    if not live_path:
+        return "fixture"
+    if age is None:
+        return "unknown age"
+    if age <= elapsed:
+        return "live"
+    return "%s old" % format_age(age)
+
+
 def pick_payload(probe_path, explicit=False):
-    """(payload_bytes, sandbox_home, live_path). A readable, valid-JSON probe
-    previews through the real HOME, and its path is returned so every preview
-    re-reads it fresh -- the renderer dumps the payload it was just fed, so
-    fresh bytes keep a live session's probe from being clobbered with
+    """(payload_bytes, sandbox_home, live_path, age_seconds). A readable,
+    valid-JSON probe previews through the real HOME, and its path is returned so
+    every preview re-reads it fresh -- the renderer dumps the payload it was just
+    fed, so fresh bytes keep a live session's probe from being clobbered with
     startup-stale data (the overwrite window shrinks to one preview's
     read-to-dump interval). A missing or invalid DEFAULT probe falls back to
     fixture data under a sandbox HOME; for a user-named --payload the same
-    silent fallback would hide a typo, so explicit=True raises instead."""
+    silent fallback would hide a typo, so explicit=True raises instead.
+
+    age_seconds exists because valid JSON is not evidence of currency. The dump
+    that writes this probe is opt-in, so it stops when a human turns it off while
+    the file stays behind: a week-old probe is readable, parses, and is returned
+    by the same branch a live one is. Nothing in the bytes distinguishes them,
+    which is why the distinction has to be carried out of here separately.
+
+    Per fe3c4f4d57ce the age is REPORTED and never acted on -- no threshold
+    rejects a probe, no age triggers the fixture fallback, and the missing and
+    invalid branches above are unchanged. It is None both for fixture data and
+    for a probe whose mtime cannot be read; neither of those is an age of 0."""
     try:
         with open(probe_path, "rb") as fh:
             raw = fh.read()
         json.loads(raw.decode("utf-8", "replace"))
-        return raw, None, probe_path
+        return raw, None, probe_path, probe_age(probe_path)
     except OSError:
         if explicit:
             raise
@@ -247,7 +306,7 @@ def pick_payload(probe_path, explicit=False):
         if explicit:
             raise ValueError("payload %s is not JSON: %s" % (probe_path, exc))
     sandbox = tempfile.mkdtemp(prefix="statusline-preview-")
-    return json.dumps(FIXTURE_PAYLOAD).encode("utf-8"), sandbox, None
+    return json.dumps(FIXTURE_PAYLOAD).encode("utf-8"), sandbox, None, None
 
 
 class PickerState:
@@ -300,11 +359,12 @@ class PickerState:
             self.cursor = j
 
 
-def draw(state, preview, write):
+def draw(state, preview, source, write):
     write("\x1b[2J\x1b[H")
     write("statusline picker -- space toggle, left/right reorder, c colors, "
           "v built-in setup, Enter save, q/Esc cancel\r\n")
-    write("\r\npreview: " + preview.replace("\n", "") + "\x1b[0m\r\n\r\n")
+    write("\r\npreview: " + preview.replace("\n", "") + "\x1b[0m\r\n")
+    write("payload: " + source + "\r\n\r\n")
     for idx, rid in enumerate(state.rows()):
         cursor = ">" if idx == state.cursor else " "
         mark = "x" if rid in state.enabled else " "
@@ -322,17 +382,22 @@ def run_picker(state, keys, previewer, write):
 
     'customize' is a cancel that carries a reason: the config is left untouched
     exactly as on 'cancelled', and the only difference is what the caller is
-    told to do next."""
+    told to do next.
+
+    previewer returns (bar, payload_label) as one value. The pair is deliberate:
+    the label describes the bytes that produced THAT bar, so binding them at the
+    source makes it impossible for a frame to show one render's preview beside
+    another render's provenance."""
     keys = iter(keys)
     dirty = True
-    preview = ""
+    preview, source = "", ""
     while True:
         if dirty:
-            preview = previewer(state)
+            preview, source = previewer(state)
             dirty = False
         # frame before pull: the key reader blocks until a key arrives, and
         # the frame must already be on screen while it waits
-        draw(state, preview, write)
+        draw(state, preview, source, write)
         key = next(keys, None)
         if key is None:
             return "cancelled"
@@ -433,12 +498,19 @@ def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
         pos = str(items.index(rid) + 1) if rid in items else "-"
         write(" [%s] %-2s %-16s %s\n" % (mark, pos, rid, label))
     write("colors: %s\n" % ("on" if colors else "off"))
-    payload, sandbox, _live = pick_payload(probe_path, explicit=explicit_payload)
+    payload, sandbox, live, age = pick_payload(probe_path, explicit=explicit_payload)
     try:
         preview = render_preview(node, js, items, colors, payload, sandbox)
     finally:
         if sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
+    # the path goes out with the label because --show is what a human runs when
+    # the bar looks wrong, and "fixture" without a path leaves them guessing
+    # which file was missing
+    if live:
+        write("payload: %s (%s)\n" % (payload_label(live, age, 0.0), live))
+    else:
+        write("payload: fixture (no usable probe at %s)\n" % probe_path)
     # reset only when the preview carries color: colors:false output is ANSI-free
     write("preview: " + preview + ("\x1b[0m" if colors else "") + "\n")
 
@@ -501,7 +573,7 @@ def selftest():
         outcome = run_picker(
             st3,
             iter(["down", "space", "up", "left", "colors", "enter"]),
-            lambda _s: "p",
+            lambda _s: ("p", "fixture"),
             sink.append,
         )
         check("scripted run saves [c,a] colors off",
@@ -509,19 +581,19 @@ def selftest():
         check("scripted run drew frames", any("picker" in s for s in sink))
         # cancel path
         st4 = PickerState(registry, ["a"], True)
-        outcome4 = run_picker(st4, iter(["space", "quit"]), lambda _s: "p", lambda _s: None)
+        outcome4 = run_picker(st4, iter(["space", "quit"]), lambda _s: ("p", "fixture"), lambda _s: None)
         check("quit cancels", outcome4 == "cancelled")
         # customize is a cancel that carries a reason: the caller must be able
         # to tell it apart from a plain cancel, and edits made before pressing
         # it must NOT be treated as a save
         st4b = PickerState(registry, ["a"], True)
-        outcome4b = run_picker(st4b, iter(["space", "customize"]), lambda _s: "p",
+        outcome4b = run_picker(st4b, iter(["space", "customize"]), lambda _s: ("p", "fixture"),
                                lambda _s: None)
         check("customize returns its own outcome", outcome4b == "customize")
         check("customize is distinguishable from cancel", outcome4b != "cancelled")
         # exhausted key stream (no Enter) must not save either
         st5 = PickerState(registry, ["a"], True)
-        outcome5 = run_picker(st5, iter(["down"]), lambda _s: "p", lambda _s: None)
+        outcome5 = run_picker(st5, iter(["down"]), lambda _s: ("p", "fixture"), lambda _s: None)
         check("key stream end cancels", outcome5 == "cancelled")
         # the first frame must be visible before the first key is pulled --
         # the reader blocks until a key arrives
@@ -532,9 +604,51 @@ def selftest():
             yield "quit"
 
         st6 = PickerState(registry, ["a"], True)
-        run_picker(st6, keys_recording(), lambda _s: "p",
+        run_picker(st6, keys_recording(), lambda _s: ("p", "fixture"),
                    lambda _s: order.append("draw") if "draw" not in order else None)
         check("first frame precedes first key pull", order[:1] == ["draw"])
+
+        # Staleness REPORTING. Every check below asserts that a stale probe is
+        # named; none asserts that one is refused, and the two that pin the
+        # no-threshold contract are the ones to keep if these are ever trimmed:
+        # a stale probe must still preview, and it must still preview from its
+        # own bytes rather than the fixture.
+        check("format_age steps one unit at each boundary",
+              (format_age(0), format_age(59), format_age(60), format_age(3599),
+               format_age(3600), format_age(86400), format_age(-5))
+              == ("0s", "59s", "1m", "59m", "1h", "1d", "0s"))
+        check("label: no probe is fixture, whatever the age argument says",
+              payload_label(None, 10 ** 9, 0.0) == "fixture")
+        check("label: unreadable mtime is unknown, never an age of zero",
+              payload_label("/p", None, 0.0) == "unknown age")
+        check("label: rewritten under a running picker is live",
+              payload_label("/p", 5.0, 30.0) == "live")
+        check("label: older than the picker reports its age",
+              payload_label("/p", 7200.0, 30.0) == "2h old")
+        check("label: a one-shot dump cannot reach live",
+              payload_label("/p", 0.5, 0.0) == "0s old")
+
+        # the shipped defect, as a fixture: readable, parses, two hours dead
+        stale = os.path.join(td, "stale-probe.json")
+        with open(stale, "w") as fh:
+            json.dump({"session_id": "stale"}, fh)
+        os.utime(stale, (time.time() - 7200, time.time() - 7200))
+        raw_s, sbox_s, live_s, age_s = pick_payload(stale)
+        check("stale probe still previews from its own bytes",
+              live_s == stale and sbox_s is None
+              and json.loads(raw_s.decode())["session_id"] == "stale")
+        check("stale probe carries a measured age out",
+              age_s is not None and 7100 < age_s < 7300)
+        check("stale probe is reported stale, not silently shown as current",
+              payload_label(live_s, age_s, 1.0) == "2h old")
+        raw_m, sbox_m, live_m, age_m = pick_payload(os.path.join(td, "absent.json"))
+        try:
+            check("missing probe: fixture, no path, and no age to report",
+                  live_m is None and age_m is None and sbox_m is not None
+                  and json.loads(raw_m.decode())["session_id"] == "00000000-fixture")
+        finally:
+            if sbox_m:
+                shutil.rmtree(sbox_m, ignore_errors=True)
 
         # preview plumbing through a fake renderer: env config + stdin arrive
         node = shutil.which("node")
@@ -680,24 +794,33 @@ def main():
     known = [rid for rid, _ in registry]
     items, colors = load_config(args.config, known)
     state = PickerState(registry, items, colors)
+    started_at = time.time()
     try:
-        payload, sandbox, live_path = pick_payload(
+        payload, sandbox, live_path, startup_age = pick_payload(
             args.payload, explicit=(args.payload != DEFAULT_PROBE))
     except (OSError, ValueError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         sys.exit(2)
 
     def previewer(st):
+        # data and age move down the same branch together, because the label has
+        # to describe the bytes actually rendered. On the fallback the startup
+        # bytes keep ageing with the picker: reporting the age they had at
+        # startup would understate it by however long the picker has been open,
+        # which is unbounded and grows exactly while a human sits reading it.
+        elapsed = time.time() - started_at
         data = payload
+        age = None if startup_age is None else startup_age + elapsed
         if live_path:
             try:
                 with open(live_path, "rb") as fh:
                     fresh = fh.read()
                 json.loads(fresh.decode("utf-8", "replace"))
-                data = fresh
+                data, age = fresh, probe_age(live_path)
             except (OSError, ValueError):
                 pass  # probe mid-write or gone: fall back to the startup bytes
-        return render_preview(node, args.js, st.enabled, st.colors, data, sandbox)
+        bar = render_preview(node, args.js, st.enabled, st.colors, data, sandbox)
+        return bar, payload_label(live_path, age, elapsed)
 
     def write_flush(s):
         sys.stdout.write(s)
