@@ -2,11 +2,14 @@
 
 reviews:
   auto_review:
-    # Measured 2026-08-29: automatic review paused at the FIRST commit of both PR #2
-    # and PR #3, ~45s after each was opened -- not after the documented default of 5.
-    # The trigger is still unexplained (repo task #4); this key is set explicitly so the
-    # value lives in the repository instead of in a dashboard nobody here can read.
-    # 25 is headroom over the largest PR this repo has had (9 commits), not a derived
-    # bound. 0 would disable the pause entirely, at a documented cost to the review
-    # rate limit, so the safety valve is kept.
+    # The default of 5 behaves exactly as documented. Re-measured 2026-08-29 by comment
+    # revision: the pause block is written INTO the walkthrough comment by a later edit,
+    # so that comment's creation time does not date it. Reading the full body at each
+    # revision puts the pause at PR #2 revision 11 and PR #3 revision 16 -- five pushed
+    # commits in both cases.
+    #
+    # It is raised here because both fix loops in this repo ran past 5 commits and both
+    # were interrupted mid-loop. 25 clears the largest PR so far (9 commits); it is
+    # headroom, not a derived bound. 0 would disable the pause entirely, at a documented
+    # cost to the review allowance, so the safety valve is kept.
     auto_pause_after_reviewed_commits: 25
