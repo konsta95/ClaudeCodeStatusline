@@ -260,6 +260,107 @@ so under `sudo` the mode-based fixture would let both arms save happily, and the
 report failures that say nothing about the picker. A precondition proves the fixture is
 genuinely unsavable before any arm is read.
 
+### The carrier
+
+```bash
+python3 lab/carrier_lab.py
+```
+
+The exit-code lab covers what the picker does. This covers what the `/statusline` command does
+with it — the pane, the sentinel file, the bounded wait, and the classification of whatever
+comes back — across eleven live tmux arms. The carrier under test is **extracted from
+`commands/statusline.md`** rather than retyped, so a passing arm says something about the
+shipped text and not about a copy that drifted, and the four pre-fix controls are built by
+reverting one region each of that same extracted text. One region each is the part that has
+to be enforced rather than asserted: `F'` reverts the tail and `F"` reverts the cleanup
+guard, and only the second puts any weight on that guard at all — under the old tail the
+report is `missing`, so the fixed cleanup line deletes `$ERR` unaided and a control that
+reverted both regions at once would have proved nothing about either.
+
+Two of the arms are the same run reported twice. `F` holds a picker sleeping past the
+watchdog; `G` holds one that has already saved and exited, with the sentinel's publication
+widened until it is observable rather than raced for. Both come back `still-open` over a live
+pane, and they differ only in something the carrier cannot see — so the pair is what
+establishes that `still-open` carries no picker state at all. One arm alone would have read
+as an edge case.
+
+The probe behind that pair matches the picker's pid *and* its `argv`, because a reused pid
+would otherwise read as still running, and it matches the exact picker path rather than a
+pattern, because the pane's own shell carries that path in its command line — a `pgrep -f`
+test reports the picker alive in every arm, forever.
+
+That precision is also what makes this lab **Linux-only**. It reads `/proc/<pid>/cmdline`, and
+the portable substitute — `ps -o args=` — joins argv with spaces, which the exact match cannot
+survive. Where `/proc` is missing the lab therefore refuses with exit `2` instead of degrading.
+Degrading is the worse option, and not symmetrically: without `/proc` the probe answers "not
+running" to every question, so `F` reports a defect that is not there — loud, and someone will
+chase it — while `G` passes for a reason with nothing to do with what it tests. The quiet one
+is the one that would survive.
+
+It refuses on an unusable **tmux** for the same reason. Whether a `tmux` binary exists is a
+different question from the one the arms need answered: the carrier reads a pane id out of
+`split-window -P -F`, and tells a live pane from a dead one with `list-panes -a -f` over a
+`#{==:…}` format comparison. A tmux lacking either fails *inside* the pane, where nothing is
+checking a return code — so `$PANE` comes back empty or the liveness test matches nothing, the
+arm reports `missing`, and the lab exits `1`, blaming the carrier for the environment. The
+preflight therefore exercises those options against a throwaway session instead of parsing
+`tmux -V`. No minimum version is published here on purpose: a version string says what was
+compiled rather than what this server will accept, and the capability has been measured on
+exactly one tmux build — which is not enough to publish a bound.
+
+It also requires **`timeout` or `gtimeout`** on `PATH`, and refuses with exit `2` without
+them — which is a prerequisite of the *lab*, not of the carrier. The carrier tolerates their
+absence by design and falls back to an unbounded `tmux wait-for`, because macOS ships neither.
+But arms `F`, `F'`, `F"` and `G` exist to watch the **bound** fire while the pane is still
+alive, and they do it by rewriting the carrier's own `"$TMO" 900 tmux` down to two seconds.
+With `TMO` empty that rewrite lands on a branch which is never taken: the wait runs to
+completion, the arms read back the stub's exit code instead of `still-open`, and four arms
+disagree — reported as exit `1`, a carrier defect, for a missing coreutils. `brew install
+coreutils` provides `gtimeout`.
+
+The same refusal covers the carrier document itself. The lab extracts the shell block from
+`commands/statusline.md` at *import* — before `main()`, and therefore before every guard
+`main()` installs — so a document that cannot be read raised straight through Python's
+blanket "uncaught exception exits `1`", reporting a carrier disagreement about a file it
+never opened. That read is now guarded and exits `2` naming the path.
+
+Failure paths were watched firing rather than assumed: breaking the carrier's reporting line
+in a throwaway copy of the repo produced `CARRIER LAB FAILED (9 arms disagreed)` and exit `1`,
+and removing a mutation anchor produced exit `2` — the lab refusing to build a control that
+would no longer revert what it names. An anchor that occurs *more* than once is refused the
+same way, because `str.replace` rewrites every occurrence: a control whose anchor quietly
+stopped being unique would revert more than it claims, which is no more use than reverting
+less.
+
+### A failed save
+
+```bash
+python3 lab/save_failure_probe.py
+```
+
+The command documents that nothing is written for any picker exit code other than `0`. Three
+of the four non-zero codes never reach the save path at all, so the whole claim rests on `2`,
+which is what a failed save exits with. This drives the real picker over a pty against a
+read-only config directory and checks the config byte-for-byte afterwards, along with the
+directory it writes its temp into. It refuses to report at all under `sudo`: mode `0o555` does
+not bind for root, the save would succeed, and a pass measured that way would be vacuous. It
+refuses on a platform with no `os.geteuid` for the same reason, and before trusting any result
+it writes a witness file into the directory to confirm the mode actually took — `chmod` can
+report success and still not bind, and each way that happens ends in a green pass that measured
+nothing. A `chmod` the filesystem refuses outright is the other half of that, and exits `2` as
+well: it is not a picker defect that a mount will not take POSIX modes. So does a failure to
+restore the mode afterwards — except that one is only *reported*, because by then the
+measurement has already been made, and an exception from a `finally` does not travel beside the
+pending return, it replaces it.
+
+The exit code alone cannot carry this claim. The picker has **eight** routes to exit `2` and
+only one of them is the failed save — the other seven fire before `save_config` is reached.
+A missing `node`, an absent tty, a config that will not load all
+arrive with the config untouched and no temp stranded — precisely the footprint of a clean
+pass. So the probe also requires the save-specific `could not save` diagnostic, and when `2`
+arrives without it the probe returns `2` rather than `1`: a picker that never reached the save
+leaves the question unanswered, which is not the same as the guarantee being broken.
+
 ## Status
 
 This is a prototype demonstrating feasibility, not a supported tool. It is deliberately small
