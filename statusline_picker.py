@@ -284,12 +284,26 @@ def payload_label(live_path, age, elapsed):
     line rewrites the probe, so a probe that moves under a running picker has a
     producer behind it at that moment.
 
-    ELAPSED=0 means there was no window for a rewrite to fall into, so no age can
-    be live -- that is what the one-shot dump asserts. It is tested for rather
-    than left to the comparison, because a probe whose mtime sits at or ahead of
-    the clock yields an age of zero or less, and that compares as live against a
-    zero window. Clocks do run ahead: a synced home directory or a producer on
+    ELAPSED is None when there was no window for a rewrite to fall into -- the
+    one-shot dump asserts that -- and the wall-clock length of the window
+    otherwise. A sentinel rather than a measured "greater than zero", because a
+    duration cannot answer whether a window EXISTS once the clock is allowed to
+    step: a backward step makes a real window measure negative, and a probe
+    written into it is then reported old. The one-shot needs an explicit answer
+    for a second reason as well -- a probe whose mtime sits at or ahead of the
+    clock yields an age of zero or less, which compares as live against a window
+    of any length. Clocks do run ahead: a synced home directory or a producer on
     another host is enough.
+
+    AGE and ELAPSED must be derived from the SAME instant. Each is that instant
+    minus a fixed point, so it cancels out of the comparison, which is therefore
+    exactly "was the probe rewritten after this picker started" -- a question
+    about two fixed points, whose answer no later clock adjustment can change.
+    Taking the two from different clocks destroys the cancellation and that
+    immunity with it. An ELAPSED from CLOCK_MONOTONIC in particular, which does
+    not advance while the machine is suspended, reports a probe written seconds
+    after startup as hours old across a suspend: its AGE counts the suspended
+    time and its ELAPSED does not.
 
     AGE None means the caller could not determine one. No caller produces that
     today -- read_probe raises instead -- and the branch is kept so that one which
@@ -299,7 +313,7 @@ def payload_label(live_path, age, elapsed):
         return "fixture"
     if age is None:
         return "unknown age"
-    if elapsed > 0 and age <= elapsed:
+    if elapsed is not None and age <= elapsed:
         return "live"
     return "%s old" % format_age(age)
 
@@ -578,7 +592,8 @@ def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
         # mtime cannot happen today -- they are set together -- and it degrades to
         # "unknown age" rather than a crash if that ever stops being true.
         age = None if mtime is None else time.time() - mtime
-        write("payload: %s (%s)\n" % (payload_label(live, age, 0.0), live))
+        # no window: this process opened no picker for a rewrite to land under
+        write("payload: %s (%s)\n" % (payload_label(live, age, None), live))
     else:
         write("payload: fixture (no usable probe at %s)\n" % probe_path)
     # reset only when the preview carries color: colors:false output is ANSI-free
@@ -688,25 +703,43 @@ def selftest():
                format_age(3600), format_age(86400), format_age(-5))
               == ("0s", "59s", "1m", "59m", "1h", "1d", "0s"))
         check("label: no probe is fixture, whatever the age argument says",
-              payload_label(None, 10 ** 9, 0.0) == "fixture")
+              payload_label(None, 10 ** 9, None) == "fixture")
         check("label: unreadable mtime is unknown, never an age of zero",
-              payload_label("/p", None, 0.0) == "unknown age")
+              payload_label("/p", None, None) == "unknown age")
         check("label: rewritten under a running picker is live",
               payload_label("/p", 5.0, 30.0) == "live")
         check("label: older than the picker reports its age",
               payload_label("/p", 7200.0, 30.0) == "2h old")
         check("label: a one-shot dump cannot reach live",
-              payload_label("/p", 0.5, 0.0) == "0s old")
-        # the boundary the comparison alone gets wrong: age <= 0 against a zero
+              payload_label("/p", 0.5, None) == "0s old")
+        # the boundary the comparison alone gets wrong: age <= 0 against no
         # window. A probe written in the same clock tick, or by a producer whose
         # clock runs ahead, lands exactly here.
         check("label: a one-shot dump cannot reach live at age zero",
-              payload_label("/p", 0.0, 0.0) == "0s old")
+              payload_label("/p", 0.0, None) == "0s old")
         check("label: nor when the probe's mtime runs ahead of the clock",
-              payload_label("/p", -30.0, 0.0) == "0s old")
+              payload_label("/p", -30.0, None) == "0s old")
         check("label: a running picker still reaches live at the same ages",
               (payload_label("/p", 0.0, 5.0), payload_label("/p", -30.0, 5.0))
               == ("live", "live"))
+
+        # A wall-clock step under a running picker. Same probe and same picker as
+        # the live check above -- written 4s after startup -- seen through a clock
+        # that jumped an hour. Both arguments move with the step, so it cancels
+        # out of the comparison and the verdict does not move. Backward is the
+        # direction the shipped code got wrong: it read a negative window as no
+        # window at all and called a live probe dead.
+        check("label: a backward clock step does not kill a live probe",
+              payload_label("/p", -3504.0, -3500.0) == "live")
+        check("label: nor does a forward clock step",
+              payload_label("/p", 3696.0, 3700.0) == "live")
+        # Why the window is measured on the same clock as the age and not on a
+        # monotonic one: an hour of suspend, which CLOCK_MONOTONIC does not count.
+        # It reaches the age either way -- an mtime has only the wall clock behind
+        # it -- so a monotonic window would be short by the suspend and call this
+        # 1h old.
+        check("label: suspended time counts on both sides or on neither",
+              payload_label("/p", 3606.0, 3610.0) == "live")
 
         # the shipped defect, as a fixture: readable, parses, two hours dead
         stale = os.path.join(td, "stale-probe.json")
