@@ -1,8 +1,8 @@
 # claude-code-statusline-picker
 
 An interactive status line picker for [Claude Code](https://github.com/anthropics/claude-code) —
-toggle components on and off, reorder them, and see a live preview of the assembled bar
-before you save.
+customize what your status line shows: toggle components on and off, reorder them, and see a
+live preview of the assembled bar before you save.
 
 This is a working prototype built to demonstrate that a built-in `/statusline` picker is
 mostly assembly-and-UI over data Claude Code already computes on every render. It runs
@@ -174,7 +174,7 @@ The semantics are modelled on Codex's `status_line_setup.rs`, and they are the w
 Because the picker previews by invoking the real renderer with `STATUSLINE_CONFIG` pointed at
 a candidate file, the preview cannot drift from what saving actually produces.
 
-## The payload
+## The statusLine JSON payload
 
 `statusline.js` reads everything from the JSON on stdin — no transcript parsing, no
 model-name guessing, and no subprocesses. The script runs on every refresh and can be
@@ -211,7 +211,7 @@ asking every user to rediscover them in their own render script:
   concurrent writers.
 - The terminal must be restored on **every** exit path, `Ctrl-C` included.
 
-## The lab
+## The pty regression lab
 
 `lab/picker_lab.py` drives the real picker binary through a pty pair, under sandboxed `HOME`
 directories, across 28 cases: launch-window keystrokes, ESC/CSI/SS3 parsing, hung and garbage
@@ -260,7 +260,7 @@ so under `sudo` the mode-based fixture would let both arms save happily, and the
 report failures that say nothing about the picker. A precondition proves the fixture is
 genuinely unsavable before any arm is read.
 
-### The carrier
+### The carrier lab — the tmux pane handoff
 
 ```bash
 python3 lab/carrier_lab.py
@@ -332,7 +332,7 @@ same way, because `str.replace` rewrites every occurrence: a control whose ancho
 stopped being unique would revert more than it claims, which is no more use than reverting
 less.
 
-### A failed save
+### The failed-save probe
 
 ```bash
 python3 lab/save_failure_probe.py
