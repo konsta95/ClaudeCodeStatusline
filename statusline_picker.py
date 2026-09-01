@@ -651,15 +651,28 @@ def read_keys_windows(getwch):
             yield "quit"
 
 
+def vt_flags_needed(mode_value):
+    """(already_ok, mode_to_request) for a console output mode. 0x0004 is
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING; 0x0001, ENABLE_PROCESSED_OUTPUT, must
+    accompany it -- without it the console writes VT sequences into the buffer
+    literally instead of parsing them, and draw()'s \\r\\n discipline depends
+    on it in its own right. So a mode with VT set but processed output clear
+    is NOT accepted as already-ok. Pure on purpose: the ctypes path below can
+    only execute on Windows, and this is the part of it whose wrong answer is
+    a corrupted screen, so it has to be checkable everywhere."""
+    want = 0x0001 | 0x0004
+    return (mode_value & want == want, mode_value | want)
+
+
 def enable_vt_output():
     """Best-effort switch of the Windows console to ANSI (VT) processing,
     which draw() and the renderer's colored output require. True when VT
     sequences will be honoured, False when this console cannot render the TUI
     (a pre-VT conhost). Never raises: anywhere without the Win32 console API
     -- every POSIX platform -- the honest answer is simply False, and no
-    caller there needs it. 0x0004 is ENABLE_VIRTUAL_TERMINAL_PROCESSING and
-    -11 is STD_OUTPUT_HANDLE, named here because ctypes carries no symbolic
-    constants for them."""
+    caller there needs it. -11 is STD_OUTPUT_HANDLE, named here because
+    ctypes carries no symbolic constants for it; the mode flags live in
+    vt_flags_needed."""
     try:
         import ctypes
         windll = getattr(ctypes, "windll", None)  # exists only on Windows
@@ -670,9 +683,10 @@ def enable_vt_output():
         mode = ctypes.c_uint32()
         if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
             return False
-        if mode.value & 0x0004:
+        ok, wanted = vt_flags_needed(mode.value)
+        if ok:
             return True
-        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+        return bool(kernel32.SetConsoleMode(handle, wanted))
     except (AttributeError, OSError, ValueError):
         return False
 
@@ -1137,6 +1151,16 @@ def selftest():
     check("enable_vt_output returns a bool, never raises", vt in (True, False))
     if not sys.platform.startswith("win"):
         check("enable_vt_output is False off-Windows", vt is False)
+    # the flag decision is pure so the corrupted-screen case is pinned here,
+    # off-Windows included: VT (0x0004) WITHOUT processed output (0x0001) is
+    # an invalid configuration the console writes sequences into literally,
+    # so it must not be accepted as already-ok
+    check("vt flags: default console mode (0x0003) needs the request",
+          vt_flags_needed(0x0003) == (False, 0x0007))
+    check("vt flags: VT without processed output is not accepted",
+          vt_flags_needed(0x0004) == (False, 0x0005))
+    check("vt flags: both set is already ok, request unchanged",
+          vt_flags_needed(0x0007) == (True, 0x0007))
 
     print("---")
     print("SELFTEST %s (%d failures)" % ("PASSED" if not failures else "FAILED", len(failures)))
