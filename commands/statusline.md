@@ -95,7 +95,7 @@ CHAN="statusline-picker-$$"
 SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
 rm -f "$SENT" "$SENT.part" "$ERR"
 TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither by default
-PANE=$(tmux split-window -v -l 16 -P -F '#{pane_id}' \
+PANE=$(tmux split-window -v -f -l 16 -P -F '#{pane_id}' \
   "if : 2>>\"$ERR\" && exec 9>>\"$ERR\"; then python3 \"$PICKER\" 2>&9; RC=\$?; else RC=setup; fi
    echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN") \
   && if [ -n "$TMO" ]; then "$TMO" 900 tmux wait-for "$CHAN"
@@ -114,10 +114,12 @@ echo "picker-exit=$RC"
 [ "$RC" = still-open ] || rm -f "$SENT" "$SENT.part" "$ERR"
 ```
 
-`-v` opens the pane BELOW the session — at the terminal's bottom, beside where the status
-line itself lives — and `-l 16` gives it the ~14 lines it needs; a side-by-side `-h` split
-is too narrow and the preview line clips mid-word. Focus moves to the pane, which is the
-point — the human types there.
+`-v -f` opens the pane at the terminal's TRUE bottom — full width, below every existing
+pane, beside where the status line itself lives. Plain `-v` splits only the current pane,
+so in an already-split window the picker would land mid-stack (measured on tmux 3.6: from
+a top pane, `-v` placed it at row 15 of 40, `-v -f` at row 35). `-l 16` gives it the ~14
+lines it needs; a side-by-side `-h` split is too narrow and the preview line clips
+mid-word. Focus moves to the pane, which is the point — the human types there.
 
 Keys once it opens: `↑`/`↓` move, `space` toggles, `←`/`→` reorder within the enabled block,
 `c` colours, **`v` built-in setup**, `Enter` saves, `q`/`Esc` cancels.
