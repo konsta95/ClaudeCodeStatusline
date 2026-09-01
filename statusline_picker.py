@@ -88,7 +88,7 @@ HOME = os.path.expanduser("~")
 # each: in a clone it is this file's sibling; installed, the picker goes to
 # ~/.claude/tools/ while the renderer stays at ~/.claude/statusline.js, which is
 # where settings.json's statusLine.command points at it. Resolution walks the
-# layouts in that order and takes the first that EXISTS, so a clone stays
+# layouts in that order and takes the first that is a FILE, so a clone stays
 # self-contained and an install still finds its renderer.
 JS_CANDIDATES = (
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "statusline.js"),
@@ -99,17 +99,23 @@ JS_CANDIDATES = (
 def resolve_js(env=None, candidates=JS_CANDIDATES):
     """Path to the renderer this picker previews and configures through.
 
-    STATUSLINE_JS wins, and is returned verbatim even when nothing is there:
-    falling through to a candidate would preview a DIFFERENT renderer than the
-    caller named, which is worse than the error they get for naming a bad one.
-    Returns the first candidate when none exists, because the caller needs a
+    STATUSLINE_JS wins whenever it is SET, and is returned verbatim -- absent
+    file, empty string, anything. Presence is the test rather than truthiness:
+    falling through would preview a DIFFERENT renderer than the caller named,
+    and an empty value is usually a script that expanded an unset variable,
+    which deserves an error rather than a silent substitution.
+
+    Candidates must be files. A directory named statusline.js would otherwise
+    win selection and mask the real renderer waiting behind it.
+
+    Returns the first candidate when none matches, because the caller needs a
     path to name in its message and that one describes the layout it is in.
     """
-    override = (os.environ if env is None else env).get("STATUSLINE_JS")
-    if override:
-        return override
+    environment = os.environ if env is None else env
+    if "STATUSLINE_JS" in environment:
+        return environment["STATUSLINE_JS"]
     for candidate in candidates:
-        if os.path.exists(candidate):
+        if os.path.isfile(candidate):
             return candidate
     return candidates[0]
 
@@ -1252,9 +1258,20 @@ def selftest():
               "swapped for a renderer the caller did not name",
               resolve_js({"STATUSLINE_JS": absent_sibling},
                          (clone_js, estate_js)) == absent_sibling)
+        check("resolve_js: an EMPTY STATUSLINE_JS is set, so it wins too -- a "
+              "script that expanded an unset variable must not silently get "
+              "the default renderer",
+              resolve_js({"STATUSLINE_JS": ""}, (clone_js, estate_js)) == "")
         check("resolve_js: with nothing on disk it names the first candidate",
               resolve_js({}, (absent_sibling, absent_sibling + ".x"))
               == absent_sibling)
+        # A directory is not a renderer. os.path.exists would take this one and
+        # mask the real file behind it, which is the whole reason for isfile.
+        dir_js = os.path.join(td, "dirshaped", "statusline.js")
+        os.makedirs(dir_js, exist_ok=True)
+        check("resolve_js: a DIRECTORY named statusline.js loses to the real "
+              "renderer behind it",
+              resolve_js({}, (dir_js, estate_js)) == estate_js)
 
         # preview plumbing through a fake renderer: env config + stdin arrive
         node = shutil.which("node")
@@ -1582,8 +1599,13 @@ def main():
     if not node:
         print("error: node not on PATH (the renderer is a Node script)", file=sys.stderr)
         sys.exit(2)
-    if not os.path.exists(args.js):
-        print("error: renderer not found: %s" % args.js, file=sys.stderr)
+    # isfile, not exists, for the same reason resolve_js uses it: a directory
+    # here would pass the guard and hand node something it cannot run. An empty
+    # path gets a readable stand-in so a script that expanded an unset variable
+    # does not produce a message that trails off into nothing.
+    if not os.path.isfile(args.js):
+        print("error: renderer not found: %s" % (args.js or "(empty path)"),
+              file=sys.stderr)
         sys.exit(2)
 
     if args.show and (args.apply is not None or args.colors or args.scheme is not None):
