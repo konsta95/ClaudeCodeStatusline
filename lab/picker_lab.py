@@ -21,6 +21,14 @@ fixed contract — unique-temp saves through the real save_config, the timed-out
 preview notice, autowrap-off framing — so their original known-bad observations
 live only in the frozen pre-fix log.
 
+A second exception, to the sandbox convention rather than to the binary rule:
+child_env points STATUSLINE_JS at the renderer copy inside the sandbox, which the
+sabotage cases need, but that override is also the one branch of renderer
+resolution that has never been broken. Case N15 therefore runs the picker from
+the layout it INSTALLS into — ~/.claude/tools/ with the renderer one level up —
+and removes the override, so the default resolution path is covered. Any new case
+that leans on child_env inherits the override and cannot see a resolution defect.
+
 One exception to "not an import": case N12 imports the picker module directly to
 hammer save_config from two threads. The concurrent-save collision window is
 microseconds wide and cannot be steered from outside the process, so that case
@@ -739,6 +747,26 @@ def main():
              % (hid_before_frame, hide_idx, frame_idx, shown_after_quit, code))
     p.kill_close()
 
+    # ---- N15: the INSTALLED layout, resolving with no STATUSLINE_JS to lean on.
+    # Every other case here runs the picker from the repo tree with the override
+    # set by child_env, so between them they exercise the one branch of renderer
+    # resolution that was never broken. This case is the other one: it puts the
+    # picker where it actually installs (~/.claude/tools/) with the renderer one
+    # level up, and takes the override away, which is exactly the shape that
+    # shipped green while /statusline exited 2 against an unreachable renderer.
+    home = make_home("n15")
+    installed = os.path.join(home, ".claude", "tools", "statusline_picker.py")
+    shutil.copy2(PICKER, installed)
+    env = child_env(home)
+    env.pop("STATUSLINE_JS", None)
+    out = subprocess.run([PY, installed, "--show"], capture_output=True,
+                         env=env, timeout=30)
+    txt = out.stdout.decode("utf-8", "replace")
+    n15 = out.returncode == 0 and "preview:" in txt
+    evidence("N15-install-resolution", "ok" if n15 else "FINDING",
+             "installed picker, no STATUSLINE_JS: rc=%d preview-line=%s"
+             % (out.returncode, "preview:" in txt))
+
     # ---- F-cases: every comparator that can report "ok" above is observed
     # firing against a doctored known-bad first (house rule). Expected verdict
     # for each F-case is FLIPPED — the detector fires.
@@ -805,6 +833,26 @@ def main():
              "garbage config takes the exception branch: %s" % f4)
     if not f4:
         lab_error("F4", "config comparator blind")
+
+    # F5 flips N15's resolution comparator. The known-bad is a LAYOUT, not a
+    # doctored picker: the same installed picker with no renderer at either
+    # candidate path must refuse. Without this arm N15's "ok" could mean the
+    # picker resolved, or merely that --show is cheerful about anything.
+    home = make_home("f5")
+    os.remove(os.path.join(home, ".claude", "statusline.js"))
+    installed = os.path.join(home, ".claude", "tools", "statusline_picker.py")
+    shutil.copy2(PICKER, installed)
+    env = child_env(home)
+    env.pop("STATUSLINE_JS", None)
+    out = subprocess.run([PY, installed, "--show"], capture_output=True,
+                         env=env, timeout=30)
+    txt = (out.stdout + out.stderr).decode("utf-8", "replace")
+    f5 = out.returncode != 0 and "renderer not found" in txt
+    evidence("F5-resolution-flip", "FLIPPED" if f5 else "LAB-DEAD",
+             "no renderer at any candidate: rc=%d names-the-miss=%s"
+             % (out.returncode, "renderer not found" in txt))
+    if not f5:
+        lab_error("F5", "resolution comparator blind")
 
     print("---")
     if lab_errors:
