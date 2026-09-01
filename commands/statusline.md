@@ -10,7 +10,7 @@ hands off to Claude Code's own built-in statusline setup.
 
 Copy this file to `~/.claude/commands/statusline.md`. A user command shadows the built-in of
 the same name, so `/statusline` reaches this instead. If you cloned the repo somewhere other
-than `~/claude-code-statusline-picker`, change the path in **every** block below — each one
+than `~/ClaudeCodeStatusline`, change the path in **every** block below — each one
 runs in its own shell, so none of them can inherit the path from another.
 
 **Do not spawn the `statusline-setup` agent up front, and do not edit `settings.json`.** That
@@ -29,11 +29,11 @@ goes through the picker's validated non-interactive path.
 1. **Measure, never remember.** Fetch the registry and the current state:
 
    ```bash
-   node "$HOME/claude-code-statusline-picker/statusline.js" --segments
+   node "$HOME/ClaudeCodeStatusline/statusline.js" --segments
    ```
 
    ```bash
-   python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show
+   python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --show
    ```
 
 2. **Build 3–4 candidate selections** spanning the request — the current bar, and
@@ -42,7 +42,7 @@ goes through the picker's validated non-interactive path.
    its own temp file and render it through the **real renderer**:
 
    ```bash
-   python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show --config /tmp/statusline-candidate-1.json
+   python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --show --config /tmp/statusline-candidate-1.json
    ```
 
    The `preview:` line of each run is that candidate's measured bar. Previews are
@@ -57,7 +57,7 @@ goes through the picker's validated non-interactive path.
 4. **Save through the picker — never hand-write the config:**
 
    ```bash
-   python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --apply "git-branch,model,context" --colors on
+   python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --apply "git-branch,model,context" --colors on
    ```
 
    `--apply` is strict where the config-file parse is forgiving: unknown or duplicate ids
@@ -89,7 +89,7 @@ backgrounded that is not a failure — the pane keeps running and the exit code 
 the output file when it finishes.
 
 ```bash
-PICKER="$HOME/claude-code-statusline-picker/statusline_picker.py"
+PICKER="$HOME/ClaudeCodeStatusline/statusline_picker.py"
 CHAN="statusline-picker-$$"
 SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
 rm -f "$SENT" "$SENT.part" "$ERR"
@@ -233,7 +233,7 @@ promoted.
 
 | code | meaning | do |
 | --- | --- | --- |
-| `0` | saved | confirm with `python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show` and report the new bar |
+| `0` | saved | confirm with `python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --show` and report the new bar |
 | `4` | cancelled | say so in one line; nothing was written |
 | `3` | the human pressed `v` | hand off — see below |
 | `2` | environment or usage error | report the captured `picker-stderr:` block verbatim; do not paper over it |
@@ -290,11 +290,11 @@ path above first; if the human specifically wants the full TUI, show them the cu
 the turn is not empty, then print the line for them to run in their own terminal, and stop:
 
 ```bash
-python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show
+python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --show
 ```
 
-```
-python3 "$HOME/claude-code-statusline-picker/statusline_picker.py"
+```bash
+python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py"
 ```
 
 ## Notes
