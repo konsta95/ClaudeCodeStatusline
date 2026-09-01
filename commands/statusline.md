@@ -80,8 +80,9 @@ by hand, offer the pane below instead of another round of popups.
 
 Open the pane when the human asks for it — "pane", "tui", "full picker", or free-form
 reordering — or when popup rounds start fighting the request. Every component sits on one
-screen: `space` toggles, arrows reorder, the preview updates per keystroke. Needs a POSIX
-terminal and tmux; on native Windows the popup path above is the working one (or use WSL).
+screen: `space` toggles, arrows reorder, the preview updates per keystroke. The pane itself
+needs tmux; native Windows has none, so there use the popup path above — or run the picker
+directly in your own terminal, which it drives natively on Windows 10+ (msvcrt + VT).
 
 Run this with a Bash `timeout` of `600000`. A human reads the bar, thinks, and toggles; the
 default 120s tool timeout would otherwise background the call mid-edit. If it does get

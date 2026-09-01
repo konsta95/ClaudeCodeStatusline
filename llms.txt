@@ -4,8 +4,9 @@
 
 A working prototype demonstrating that a built-in `/statusline` picker is mostly
 assembly-and-UI over data Claude Code already computes on every render. Node.js renderer
-plus Python 3 picker; no dependencies, no build step, no network access. Linux and macOS
-(the interactive picker needs a POSIX tty; on Windows use WSL). MIT licensed.
+plus Python 3 picker; no dependencies, no build step, no network access. Linux, macOS and
+native Windows 10+ (POSIX terminals via termios; the Windows console via msvcrt with VT
+output). MIT licensed.
 
 ## Core
 
