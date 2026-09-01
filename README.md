@@ -28,22 +28,30 @@ its own components**, and a picker that reads that description, previews candida
 configurations through the real renderer, and writes an ordered selection the renderer picks
 up on its next render — without restarting or interrupting the running session.
 
-The one thing a prototype cannot fix is the thing the request is actually about: this picker
-needs a controlling terminal, so it cannot live inside the Claude Code TUI. The `/statusline`
-command in this repo gets as close as an outside tool can — a tmux pane stacked above your
-session, so you no longer leave the terminal — but that is a workaround with a dependency, not
-a fix. A built-in picker would need neither.
+The one thing a prototype cannot fix is the thing the request is actually about: the full
+picker TUI needs a controlling terminal, so it cannot live inside the Claude Code TUI. The
+`/statusline` command in this repo gets as close as an outside tool can, from two sides.
+Its default path drives **AskUserQuestion popups** — they surface on top of the input box,
+exactly where a permission prompt surfaces — offering candidate bars rendered through the
+real renderer, and saving through the picker's validated `--apply` path; that works on any
+platform Claude Code runs on, native Windows included, but a popup holds at most four static
+options, so it picks among candidate sets rather than toggling components freely. For
+free-form reordering the command opens the picker in a tmux pane stacked above your session —
+full interactivity, but a workaround with a dependency. A built-in picker would need neither
+compromise.
 
 ## Install
 
 Requires Node.js and Python 3. No dependencies, no build step, no network access.
 
-**Platforms.** Linux and macOS. The interactive picker needs a POSIX terminal — it puts the
-tty in raw mode through `termios` — so on Windows use WSL; `--show` and `--selftest` run
-anywhere, and a Windows launch exits `2` with that explanation rather than a traceback. The
-`/statusline` command additionally wants `tmux`, and its watchdog wants GNU `timeout`, which
-base macOS does not ship: install coreutils (Homebrew names it `gtimeout`) and the command
-finds either. Without one it still runs, but the wait for the pane is then unbounded.
+**Platforms.** Linux and macOS for the interactive TUI — it needs a POSIX terminal, putting
+the tty in raw mode through `termios` — so on Windows use WSL for that; a native Windows
+launch exits `2` with that explanation rather than a traceback. `--show`, `--selftest`,
+`--apply` and `--colors` run anywhere, which is what makes the `/statusline` command's
+default AskUserQuestion path fully native-Windows-capable: nothing in it touches a tty. Only
+the command's tmux-pane path additionally wants `tmux`, and its watchdog wants GNU `timeout`,
+which base macOS does not ship: install coreutils (Homebrew names it `gtimeout`) and the
+command finds either. Without one it still runs, but the wait for the pane is then unbounded.
 
 ```bash
 git clone https://github.com/konsta95/claude-code-statusline-picker
@@ -82,9 +90,18 @@ Non-interactive uses:
 
 ```bash
 python3 statusline_picker.py --show      # render a preview and exit; no TTY needed
-python3 statusline_picker.py --selftest  # 30 checks including pty coverage
+python3 statusline_picker.py --selftest  # the built-in checks, pty coverage included
 python3 statusline_picker.py --payload FILE   # preview against a captured payload
+python3 statusline_picker.py --apply "model,context" --colors on
+                                         # save a selection without the TUI
+python3 statusline_picker.py --colors off     # keep items, change colors only
 ```
+
+`--apply` takes comma-separated component ids in render order (`""` saves an empty bar) and
+is strict where the config-file parse is forgiving: an unknown or duplicate id exits `2`
+naming it, and nothing is written. The file parse must repair silently — a config on disk
+has no one to ask — but an explicit instruction repaired silently would save a bar you did
+not ask for. Saves go through the same atomic tempfile-plus-rename path the TUI uses.
 
 Exit codes: `0` **saved**, `1` selftest failures, `2` environment or usage error, `3` the human
 pressed `v` and the caller should hand off to the built-in setup, `4` cancelled with nothing
@@ -97,8 +114,12 @@ opened it — so the exit code is the only channel out, and a shared `0` would l
 
 ## Use it from inside Claude Code
 
-`commands/statusline.md` is a slash command that opens the picker in a tmux pane above your
-session. Copy it to `~/.claude/commands/statusline.md`. It assumes the clone lives at
+`commands/statusline.md` is a slash command with two paths. By default it builds candidate
+selections, renders each through the real renderer, and offers them as **AskUserQuestion
+popups** over the input box — saving the choice via `--apply`, so it works wherever Claude
+Code runs, tmux or not. On request ("pane", "full picker", free-form reordering) it opens
+the interactive picker in a tmux pane above your session. Copy it to
+`~/.claude/commands/statusline.md`. It assumes the clone lives at
 `~/claude-code-statusline-picker`; if yours does not, change the path in every block of that
 file, since each runs in its own shell and none inherits from another. A user command shadows
 the built-in of the same name, so `/statusline` reaches it.

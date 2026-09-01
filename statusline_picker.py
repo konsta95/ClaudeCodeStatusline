@@ -50,7 +50,19 @@ CLI::
 
     statusline_picker.py              # interactive picker (needs a TTY)
     statusline_picker.py --show       # print registry, config and preview
+    statusline_picker.py --apply "model,context" [--colors on|off]
+                                      # save a selection; no TTY needed
+    statusline_picker.py --colors off # keep items, set colors only
     statusline_picker.py --selftest
+
+``--apply`` exists so a caller with no terminal of its own -- a Claude Code
+conversation building the selection through AskUserQuestion popups, any
+platform without termios -- can still save through the same validated,
+atomic path the TUI uses. It is strict where the file parse is forgiving:
+the config on disk has no one to ask, so unknown ids there are skipped,
+but --apply is an explicit instruction, and silently repairing it would
+write a bar the caller did not ask for. Same reasoning as --payload:
+explicit input fails loudly, defaults degrade gracefully.
 """
 
 import argparse
@@ -148,6 +160,30 @@ def normalize(items, known_ids):
             seen.add(item)
             result.append(item)
     return result
+
+
+def parse_apply_items(raw, known_ids):
+    """Strict parse of an --apply selection over the live registry.
+
+    Contract: comma-separated ids, order = render order; empty tokens are
+    dropped, so "" is the documented empty bar and a trailing comma is not an
+    error. Unknown and duplicate ids RAISE (message naming them) instead of
+    normalizing away -- an explicit instruction silently repaired would save a
+    bar the caller never asked for. The forgiving parse stays file-side only."""
+    items = [t for t in (t.strip() for t in raw.split(",")) if t]
+    unknown = [t for t in items if t not in known_ids]
+    if unknown:
+        raise ValueError(
+            "unknown segment id(s): %s (registry: %s)"
+            % (", ".join(unknown), ", ".join(known_ids)))
+    seen, dupes = set(), []
+    for t in items:
+        if t in seen and t not in dupes:
+            dupes.append(t)
+        seen.add(t)
+    if dupes:
+        raise ValueError("duplicate segment id(s): %s" % ", ".join(dupes))
+    return items
 
 
 def load_config(path, known_ids):
@@ -615,6 +651,26 @@ def selftest():
     check("normalize skips unknown + dupes", normalize(["c", "zz", "a", "c"], known) == ["c", "a"])
     check("normalize empty stays empty", normalize([], known) == [])
 
+    # --apply parse: strict where the file parse above is forgiving. The two
+    # refusal checks run against known-bad input by construction -- they are the
+    # observation that the guard fires, not an assumption that it would.
+    check("apply parse preserves order", parse_apply_items("c,a", known) == ["c", "a"])
+    check("apply parse tolerates whitespace + trailing comma",
+          parse_apply_items(" a , b ,", known) == ["a", "b"])
+    check("apply parse: empty string is the empty bar", parse_apply_items("", known) == [])
+    try:
+        parse_apply_items("a,zz,yy", known)
+        check("apply parse refuses unknown ids, naming them", False)
+    except ValueError as exc:
+        check("apply parse refuses unknown ids, naming them",
+              "zz" in str(exc) and "yy" in str(exc))
+    try:
+        parse_apply_items("a,b,a", known)
+        check("apply parse refuses duplicate ids, naming them", False)
+    except ValueError as exc:
+        check("apply parse refuses duplicate ids, naming them",
+              str(exc).endswith(": a"))
+
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "cfg.json")
 
@@ -836,6 +892,39 @@ def selftest():
                 reg = fetch_registry(node, DEFAULT_JS)
                 check("live registry: >=8 id+label pairs",
                       len(reg) >= 8 and all(r and l for r, l in reg))
+
+                # --apply end to end, both polarities. The known-bad arm is the
+                # whole point: a refusal must leave NOTHING on disk, because a
+                # config written on the way to exit 2 would be a save the caller
+                # was told did not happen.
+                e2e_cfg = os.path.join(td, "apply-cfg.json")
+                bad = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--apply", "model,bogus-id", "--config", e2e_cfg,
+                     "--js", DEFAULT_JS],
+                    capture_output=True, text=True)
+                check("apply e2e: unknown id exits 2 naming it, writes nothing",
+                      bad.returncode == 2 and "bogus-id" in bad.stderr
+                      and not os.path.exists(e2e_cfg))
+                first_two = [rid for rid, _ in reg][:2]
+                good = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--apply", ",".join(first_two), "--colors", "off",
+                     "--config", e2e_cfg, "--js", DEFAULT_JS],
+                    capture_output=True, text=True)
+                check("apply e2e: saves exactly the selection, colors off",
+                      good.returncode == 0
+                      and load_config(e2e_cfg, [r for r, _ in reg])
+                      == (first_two, False))
+                # --colors alone edits colors and keeps the saved items
+                flip = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--colors", "on", "--config", e2e_cfg, "--js", DEFAULT_JS],
+                    capture_output=True, text=True)
+                check("apply e2e: --colors alone keeps items, flips colors",
+                      flip.returncode == 0
+                      and load_config(e2e_cfg, [r for r, _ in reg])
+                      == (first_two, True))
             else:
                 print("SKIP: live registry (no %s)" % DEFAULT_JS)
         else:
@@ -908,6 +997,14 @@ def main():
     ap.add_argument("--show", action="store_true",
                     help="print registry, current config and preview; no TTY needed")
     ap.add_argument("--selftest", action="store_true", help="run the built-in checks")
+    ap.add_argument("--apply", metavar="IDS",
+                    help="save a selection without the TUI: comma-separated segment "
+                         "ids in render order ('' saves an empty bar); unknown or "
+                         "duplicate ids are refused with exit 2; no TTY needed")
+    ap.add_argument("--colors", choices=("on", "off"),
+                    help="set colors when saving via --apply, or alone to change "
+                         "colors while keeping the current items; absent = keep "
+                         "the current value")
     ap.add_argument("--js", default=DEFAULT_JS, help="statusline renderer path")
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="config file to edit")
     ap.add_argument("--payload", default=DEFAULT_PROBE,
@@ -926,6 +1023,11 @@ def main():
         print("error: renderer not found: %s" % args.js, file=sys.stderr)
         sys.exit(2)
 
+    if args.show and (args.apply is not None or args.colors):
+        print("error: --show does not combine with --apply/--colors "
+              "(one reads, the other writes)", file=sys.stderr)
+        sys.exit(2)
+
     if args.show:
         try:
             show(node, args.js, args.config, args.payload, sys.stdout.write,
@@ -933,6 +1035,38 @@ def main():
         except (RuntimeError, OSError, ValueError) as exc:
             print("error: %s" % exc, file=sys.stderr)
             sys.exit(2)
+        sys.exit(0)
+
+    if args.apply is not None or args.colors:
+        # The non-interactive save path. Reaches neither the TTY probe nor the
+        # termios import below on purpose: this is the path a caller with no
+        # terminal -- an AskUserQuestion-built selection, native Windows -- saves
+        # through, and it shares load/validate/save with the TUI rather than
+        # reimplementing them.
+        try:
+            registry = fetch_registry(node, args.js)
+        except RuntimeError as exc:
+            print("error: %s" % exc, file=sys.stderr)
+            sys.exit(2)
+        known = [rid for rid, _ in registry]
+        items, colors = load_config(args.config, known)
+        if args.apply is not None:
+            try:
+                items = parse_apply_items(args.apply, known)
+            except ValueError as exc:
+                print("error: %s" % exc, file=sys.stderr)
+                sys.exit(2)
+        if args.colors:
+            colors = args.colors == "on"
+        try:
+            save_config(args.config, items, colors)
+        except OSError as exc:
+            print("error: could not save %s: %s" % (args.config, exc), file=sys.stderr)
+            sys.exit(2)
+        print("saved %s" % args.config)
+        print("items:  %s" % (", ".join(items) or "(none -- empty line)"))
+        print("colors: %s" % ("on" if colors else "off"))
+        print("takes effect on the next statusline refresh; delete the file to restore defaults")
         sys.exit(0)
 
     if not sys.stdin.isatty() or not sys.stdout.isatty():

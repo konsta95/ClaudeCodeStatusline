@@ -2,9 +2,11 @@
 
 **Input:** $ARGUMENTS
 
-Open the picker in a tmux pane. Always — with or without an argument, whatever the argument
-says. There is no preset path and no question-first path: the picker itself is the interface,
-and inside it `v` hands off to Claude Code's own built-in statusline setup.
+Customize the status line without leaving the conversation. The default interface is
+**AskUserQuestion popups** — they surface on top of the input box, exactly where a permission
+prompt surfaces, with each candidate bar rendered through the real renderer as its preview.
+The tmux pane TUI remains available **on request** for free-form reordering; inside it `v`
+hands off to Claude Code's own built-in statusline setup.
 
 Copy this file to `~/.claude/commands/statusline.md`. A user command shadows the built-in of
 the same name, so `/statusline` reaches this instead. If you cloned the repo somewhere other
@@ -17,7 +19,65 @@ the *component selection* in `~/.claude/statusline-config.json`, which the rende
 every refresh — so a save lands on the next repaint, with no restart and no interruption to the
 running session. The one path that legitimately reaches `statusline-setup` is exit code 3.
 
-## Open it
+## Default — pick with AskUserQuestion popups
+
+Take this path for a bare `/statusline` and for any argument that names components or
+preferences. It works everywhere Claude Code runs — native Windows included — because
+nothing in it needs a TTY or tmux: the popups render inside the conversation, and the save
+goes through the picker's validated non-interactive path.
+
+1. **Measure, never remember.** Fetch the registry and the current state:
+
+   ```bash
+   node "$HOME/claude-code-statusline-picker/statusline.js" --segments
+   ```
+
+   ```bash
+   python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show
+   ```
+
+2. **Build 3–4 candidate selections** spanning the request — the current bar, and
+   variations that follow what the argument asked for (drop noisy components, lead with
+   what they watch, a minimal bar). Write each as `{"items": [...], "colors": true}` to
+   its own temp file and render it through the **real renderer**:
+
+   ```bash
+   python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show --config /tmp/statusline-candidate-1.json
+   ```
+
+   The `preview:` line of each run is that candidate's measured bar. Previews are
+   rendered, never imagined.
+
+3. **Ask.** One AskUserQuestion, one option per candidate, the rendered bar in each
+   option's `preview` field, the selection list in its description. "Other" takes a
+   hand-typed list, so say so in the question. Ask about colors only when the request
+   left it open. If the human's answer implies changes, re-render and re-ask — bounded,
+   and never more than a couple of rounds before offering the pane instead.
+
+4. **Save through the picker — never hand-write the config:**
+
+   ```bash
+   python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --apply "git-branch,model,context" --colors on
+   ```
+
+   `--apply` is strict where the config-file parse is forgiving: unknown or duplicate ids
+   exit 2 naming them, and nothing is written. On exit 2, re-fetch the registry and fix
+   the list — do not retry blind, and do not write the JSON by hand to get around it.
+
+5. **Confirm.** Run `--show` again and report the new bar. The renderer re-reads the
+   config on every refresh, so the change lands on the next repaint with no restart.
+
+**What this path cannot do:** AskUserQuestion holds at most 4 options with static
+previews, so it offers *candidate sets*, not per-component toggling, and free-form
+reordering through popup rounds is clumsy. When the human wants to rearrange components
+by hand, offer the pane below instead of another round of popups.
+
+## Full-reorder TUI — the tmux pane (on request)
+
+Open the pane when the human asks for it — "pane", "tui", "full picker", or free-form
+reordering — or when popup rounds start fighting the request. Every component sits on one
+screen: `space` toggles, arrows reorder, the preview updates per keystroke. Needs a POSIX
+terminal and tmux; on native Windows the popup path above is the working one (or use WSL).
 
 Run this with a Bash `timeout` of `600000`. A human reads the bar, thinks, and toggles; the
 default 120s tool timeout would otherwise background the call mid-edit. If it does get
@@ -219,10 +279,11 @@ can be put back.
 Then spawn the agent with `subagent_type: "statusline-setup"`, passing along whatever the human
 said they wanted. This is the one place in this command where that agent is correct.
 
-## If `$TMUX` is unset
+## If `$TMUX` is unset (pane path only)
 
-Do not attempt the split — it opens somewhere the human cannot see. Show them the current bar
-so the turn is not empty, then print the line for them to run in their own terminal, and stop:
+Do not attempt the split — it opens somewhere the human cannot see. Offer the AskUserQuestion
+path above first; if the human specifically wants the full TUI, show them the current bar so
+the turn is not empty, then print the line for them to run in their own terminal, and stop:
 
 ```bash
 python3 "$HOME/claude-code-statusline-picker/statusline_picker.py" --show
@@ -236,5 +297,8 @@ python3 "$HOME/claude-code-statusline-picker/statusline_picker.py"
 
 - The component registry has a single carrier: it lives only in `statusline.js` and is fetched
   with `node statusline.js --segments`. Never hardcode a component list here.
+- Every save goes through `--apply` (or the pane's interactive save) — both validate against
+  the registry and write atomically. Hand-writing `statusline-config.json` bypasses both and
+  is never the answer to an `--apply` refusal.
 - Delete `~/.claude/statusline-config.json` to restore all components in default order.
 - An empty selection is a valid explicit choice — an empty bar, not an error.
