@@ -202,7 +202,13 @@ def fetch_schemes(node, js):
             % (js, out.returncode, out.stderr.decode("utf-8", "replace").strip())
         )
     try:
-        schemes = [str(s) for s in json.loads(out.stdout.decode("utf-8", "replace"))]
+        raw = json.loads(out.stdout.decode("utf-8", "replace"))
+        # a JSON string or object also parses and would iterate per character
+        # or per key -- only a list of non-empty names is the scheme list
+        if (not isinstance(raw, list)
+                or not all(isinstance(s, str) and s for s in raw)):
+            raise TypeError
+        schemes = raw
     except (ValueError, TypeError):
         raise RuntimeError(
             "%s --schemes printed something other than the scheme list: %r"
@@ -1326,6 +1332,33 @@ def selftest():
                 check("skew: explicit --scheme is fatal when unvalidatable",
                       skew_strict.returncode == 2
                       and "cannot validate --scheme" in skew_strict.stderr)
+                # --schemes must answer with a LIST of scheme names. A string
+                # is also valid JSON and iterates per character, a dict per
+                # key -- either would let --scheme validate against garbage
+                # the renderer never offered.
+                shape_js = os.path.join(td, "shape.js")
+                with open(shape_js, "w") as fh:
+                    fh.write(
+                        "if (process.argv.includes('--schemes')) {"
+                        "process.stdout.write(JSON.stringify('abc'));"
+                        "process.exit(0); }\n")
+                try:
+                    shape_got = fetch_schemes(node, shape_js)
+                except RuntimeError:
+                    shape_got = None
+                check("schemes fetch rejects a non-list JSON answer",
+                      shape_got is None)
+                # the degrade ring built from the preserved scheme: c must
+                # cycle scheme -> off -> scheme without ever renaming it
+                st_deg = PickerState([("a", "A", True)], ["a"], True,
+                                     scheme="zebra", schemes=("zebra",))
+                deg_walk = [(st_deg.colors, st_deg.scheme)]
+                for _ in range(2):
+                    st_deg.cycle_colors()
+                    deg_walk.append((st_deg.colors, st_deg.scheme))
+                check("degrade ring: preserved scheme cycles to off and back",
+                      deg_walk == [(True, "zebra"), (False, "zebra"),
+                                   (True, "zebra")])
             else:
                 print("SKIP: live registry (no %s)" % DEFAULT_JS)
         else:
@@ -1606,9 +1639,15 @@ def main():
     known = [e[0] for e in registry]
     schemes = fetch_schemes_or_none(node, args.js)
     items, colors, scheme, item_colors = load_config(args.config, known, schemes)
+    # Degrade ring is (scheme,), not ("codex",): PickerState normalizes a
+    # scheme outside its ring to the ring's first entry, so a codex ring would
+    # rewrite a preserved stored scheme on the next save -- measured
+    # 2026-09-01: an untouched interactive save under skew turned a stored
+    # "zebra" into "codex". The one-entry ring keeps c usable (scheme -> off
+    # -> scheme) while never claiming schemes the offer could not confirm.
     state = PickerState(registry, items, colors, scheme=scheme,
                         item_colors=item_colors,
-                        schemes=schemes or ("codex",))
+                        schemes=schemes or (scheme,))
     started_at = time.time()
     try:
         payload, sandbox, live_path, startup_mtime = pick_payload(

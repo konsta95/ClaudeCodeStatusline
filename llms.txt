@@ -14,7 +14,7 @@ output). MIT licensed.
 - [statusline.js](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline.js): the self-describing renderer — the component registry and the colour-scheme list live here alone, and the picker discovers them with `node statusline.js --segments` / `--schemes`
 - [statusline_picker.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline_picker.py): the interactive picker; `--show` (optionally with `--payload FILE`), `--selftest` and the non-interactive save path `--apply "id1,id2" [--colors on|off] [--scheme NAME]` all run without a TTY, on any platform
 - [commands/statusline.md](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/commands/statusline.md): a `/statusline` slash command that picks via AskUserQuestion popups rendered over the input box (saving through `--apply`), and on request opens the full picker in a tmux pane, reading its exit code back through a sentinel file
-- [statusline-config.example.json](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline-config.example.json): an example of the five-rule configuration contract
+- [statusline-config.example.json](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline-config.example.json): an example of the seven-rule configuration contract
 
 ## Evidence
 

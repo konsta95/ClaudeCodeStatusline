@@ -38,7 +38,9 @@ goes through the picker's validated non-interactive path.
 
 2. **Build 3–4 candidate selections** spanning the request — the current bar, and
    variations that follow what the argument asked for (drop noisy components, lead with
-   what they watch, a minimal bar). Write each as `{"items": [...], "colors": true}` to
+   what they watch, a minimal bar). Write each as `{"items": [...], "colors": true}` —
+   plus `"scheme"` and/or `"item_colors"` whenever the request named a scheme or a
+   per-component colour, so the preview shows the look actually being chosen — to
    its own temp file and render it through the **real renderer**:
 
    ```bash
@@ -61,7 +63,9 @@ goes through the picker's validated non-interactive path.
    ```
 
    `--scheme NAME` may ride along (or run alone) to pick a colour scheme — the names come
-   from `node statusline.js --schemes`, never from a hardcoded list.
+   from `node statusline.js --schemes`, never from a hardcoded list. When the request (and
+   so the previewed candidates) named a scheme, PASS it here: a save that omits `--scheme`
+   keeps whatever the config already holds, which is not necessarily what was just shown.
 
    `--apply` is strict where the config-file parse is forgiving: unknown or duplicate ids —
    and an unknown `--scheme` name — exit 2 naming them, and nothing is written. Exit 2 is

@@ -505,8 +505,8 @@ def main():
     # legitimately prints the raw override spec as a row tag ("[not-a-color]"),
     # so an unscoped search would flag the picker's own honest echo as a
     # renderer leak (observed doing exactly that on the first mutant run).
-    bar = b"".join(l for l in out.stdout.splitlines()
-                   if l.startswith(b"preview:"))
+    bar = b"".join(line for line in out.stdout.splitlines()
+                   if line.startswith(b"preview:"))
     sep_hit = b"\x1b[38;2;80;80;80m" in bar
     override_hit = b"\x1b[38;2;135;175;255m" in bar  # #87afff
     garbage_leak = b"not-a-color" in bar
