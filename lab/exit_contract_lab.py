@@ -47,13 +47,15 @@ JS = os.path.join(REPO, "statusline.js")
 # replacement is the code as it was before the fix.
 
 F1_GUARD = """        try:
-            save_config(args.config, state.enabled, state.colors)
+            save_config(args.config, state.enabled, state.colors,
+                        state.scheme, state.item_colors)
         except OSError as exc:
             print("error: could not save %s: %s" % (args.config, exc),
                   file=sys.stderr)
             sys.exit(2)
 """
-F1_UNGUARDED = """        save_config(args.config, state.enabled, state.colors)
+F1_UNGUARDED = """        save_config(args.config, state.enabled, state.colors,
+                    state.scheme, state.item_colors)
 """
 
 F6_GUARD = """    try:

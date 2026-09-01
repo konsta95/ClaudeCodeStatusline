@@ -50,8 +50,8 @@ goes through the picker's validated non-interactive path.
 
 3. **Ask.** One AskUserQuestion, one option per candidate, the rendered bar in each
    option's `preview` field, the selection list in its description. "Other" takes a
-   hand-typed list, so say so in the question. Ask about colors only when the request
-   left it open. If the human's answer implies changes, re-render and re-ask — bounded,
+   hand-typed list, so say so in the question. Ask about colors or the colour scheme only
+   when the request left it open. If the human's answer implies changes, re-render and re-ask — bounded,
    and never more than a couple of rounds before offering the pane instead.
 
 4. **Save through the picker — never hand-write the config:**
@@ -60,10 +60,15 @@ goes through the picker's validated non-interactive path.
    python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --apply "git-branch,model,context" --colors on
    ```
 
-   `--apply` is strict where the config-file parse is forgiving: unknown or duplicate ids
-   exit 2 naming them, and nothing is written. Exit 2 is not one condition, so read the
-   stderr line before acting: `unknown segment id` / `duplicate segment id` — re-fetch the
-   registry and fix the list; `could not save` — report the save error (a read-only or full
+   `--scheme NAME` may ride along (or run alone) to pick a colour scheme — the names come
+   from `node statusline.js --schemes`, never from a hardcoded list.
+
+   `--apply` is strict where the config-file parse is forgiving: unknown or duplicate ids —
+   and an unknown `--scheme` name — exit 2 naming them, and nothing is written. Exit 2 is
+   not one condition, so read the stderr line before acting: `unknown segment id` /
+   `duplicate segment id` — re-fetch the registry and fix the list; `unknown scheme` /
+   `cannot validate --scheme` — re-fetch the scheme list, or drop the flag if the renderer
+   is too old to answer `--schemes`; `could not save` — report the save error (a read-only or full
    disk is not a selection problem); anything else is a renderer or environment failure —
    report it verbatim. Never retry blind, and never write the JSON by hand to get around a
    refusal.
@@ -122,7 +127,8 @@ lines it needs; a side-by-side `-h` split is too narrow and the preview line cli
 mid-word. Focus moves to the pane, which is the point — the human types there.
 
 Keys once it opens: `↑`/`↓` move, `space` toggles, `←`/`→` reorder within the enabled block,
-`c` colours, **`v` built-in setup**, `Enter` saves, `q`/`Esc` cancels.
+`c` cycles colour schemes (codex → claude-code → mono → off), `a` cycles the selected
+component's accent colour, **`v` built-in setup**, `Enter` saves, `q`/`Esc` cancels.
 
 ### Why the sentinel and the wait
 
@@ -304,7 +310,8 @@ python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py"
 ## Notes
 
 - The component registry has a single carrier: it lives only in `statusline.js` and is fetched
-  with `node statusline.js --segments`. Never hardcode a component list here.
+  with `node statusline.js --segments`. The colour-scheme list is the same way — fetched with
+  `node statusline.js --schemes`. Never hardcode either list here.
 - Every save goes through `--apply` (or the pane's interactive save) — both validate against
   the registry and write atomically. Hand-writing `statusline-config.json` bypasses both and
   is never the answer to an `--apply` refusal.
