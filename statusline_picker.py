@@ -1315,6 +1315,13 @@ def main():
     # line after every frame, where it sits blinking as if the picker were a
     # prompt. Both are restored in the same finally, so no exit path -- save,
     # cancel, handoff, or a raise -- leaves the pane's shell without them.
+    # The restore NORMALIZES rather than round-trips the incoming state:
+    # terminfo's own exit capability is a static sequence (cnorm, measured
+    # \x1b[?12l\x1b[?25h on xterm-256color) because prior mode state is not
+    # portably queryable, so an interactive shell's defaults -- wrap on,
+    # cursor visible -- are the exit contract here, exactly as curses endwin
+    # leaves them. A DECRQM query round-trip would trade that for a blocking
+    # read on terminals that never answer it.
     write_flush("\x1b[?7l\x1b[?25l")
     try:
         outcome = run_picker(state, make_keys(), previewer, write_flush)

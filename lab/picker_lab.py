@@ -218,6 +218,20 @@ class PtyPicker:
         os.close(self.slave)
 
 
+def exit_code(st):
+    """Decode PtyPicker.wait()'s RAW waitpid status into the child's exit
+    code, or None when the wait timed out (None), the child was already
+    reaped (-1), or it died to a signal. Cases assert against the picker's
+    documented exit CONTRACT (save=0, handoff=3, cancel=4); comparing the
+    raw status against a bare code is how P5/P9 sat FINDING from the
+    initial commit -- exit(4) arrives as 1024 -- and routing every case
+    through this decoder also stops a signal death from masquerading as a
+    contract code."""
+    if st is None or st < 0 or not os.WIFEXITED(st):
+        return None
+    return os.WEXITSTATUS(st)
+
+
 def canonical_probe(home):
     """Have the RENDERER itself write the probe file, so its bytes are exactly
     what a live Claude Code refresh leaves behind (same dump code path)."""
@@ -567,12 +581,15 @@ def main():
     tb = b"Traceback" in p.buf
     p.send(b"q")
     p.read_until(b"cancelled", 10)
-    status = p.wait(5)
+    # quit path: the exit CONTRACT is 4 (cancelled). status==0 here was
+    # decode-blind against the raw waitpid encoding and sat FINDING from the
+    # initial commit while every sub-fact printed healthy.
+    code = exit_code(p.wait(5))
     restored = p.termios_restored()
-    clean = noticed and survived and not tb and status == 0 and restored
+    clean = noticed and survived and not tb and code == 4 and restored
     evidence("P5-hung-preview", "ok" if clean else "FINDING",
              "timeout-notice=%s after %.1fs survived=%s traceback=%s exit=%s termios-restored=%s"
-             % (noticed, dt, survived, tb, status, restored))
+             % (noticed, dt, survived, tb, code, restored))
     p.kill_close()
 
     # ---- P6: 40-column pty — the sweep contract: autowrap is disabled before
@@ -644,31 +661,41 @@ def main():
     p.drain()
     p.send(b"\x03")
     got = p.read_until(b"cancelled", 10)
-    status = p.wait(5)
+    # ctrl-C folds to quit, so the exit CONTRACT is 4 (cancelled), not 0 --
+    # same decode-blind comparison as P5, red since the initial commit.
+    code = exit_code(p.wait(5))
     restored = p.termios_restored()
-    clean = b"cancelled" in got and status == 0 and restored and b"KeyboardInterrupt" not in p.buf
+    clean = b"cancelled" in got and code == 4 and restored and b"KeyboardInterrupt" not in p.buf
     evidence("P9-ctrl-c", "ok" if clean else "FINDING",
              "cancelled=%s exit=%s termios-restored=%s kbdint=%s"
-             % (b"cancelled" in got, status, restored, b"KeyboardInterrupt" in p.buf))
+             % (b"cancelled" in got, code, restored, b"KeyboardInterrupt" in p.buf))
     p.kill_close()
 
-    # ---- P10: the terminal cursor — hidden before frames (\x1b[?25l) and
-    # restored on exit (\x1b[?25h), so the hardware cursor does not sit
-    # blinking under the "colors:" line while the picker owns the screen, and
-    # the pane's shell gets its cursor back afterwards. (Pre-fix: no cursor
-    # switch in either direction — observed hidden=False restored=False.)
+    # ---- P10: the terminal cursor — hidden before the FIRST frame
+    # (\x1b[?25l) and restored AFTER quit (\x1b[?25h), so the hardware cursor
+    # does not sit blinking under the "colors:" line while the picker owns
+    # the screen, and the pane's shell gets its cursor back afterwards.
+    # Order is asserted by byte position and the restore is searched only in
+    # the bytes that arrived after q — a membership scan over the whole
+    # accumulated buffer proved nothing about sequence — and the cancel exit
+    # contract (4) is required. (Pre-fix: no cursor switch in either
+    # direction — observed hidden=False restored=False.)
     home = make_home("p10")
     p = PtyPicker(home)
     p.read_until(b"colors: on", 15)
-    hide_on = b"\x1b[?25l" in p.buf
+    hide_idx = p.buf.find(b"\x1b[?25l")
+    frame_idx = p.buf.find(b"colors: on")
+    hid_before_frame = 0 <= hide_idx < frame_idx
+    mark = len(p.buf)
     p.send(b"q")
     p.read_until(b"cancelled", 10)
-    p.wait(5)
+    code = exit_code(p.wait(5))
     p.drain()
-    show_back = b"\x1b[?25h" in p.buf
-    evidence("P10-cursor", "ok" if hide_on and show_back else "FINDING",
-             "cursor-hidden-before-frames=%s restored-on-exit=%s"
-             % (hide_on, show_back))
+    shown_after_quit = b"\x1b[?25h" in p.buf[mark:]
+    clean = hid_before_frame and shown_after_quit and code == 4
+    evidence("P10-cursor", "ok" if clean else "FINDING",
+             "hidden-before-first-frame=%s (hide@%d frame@%d) restored-after-quit=%s exit=%s"
+             % (hid_before_frame, hide_idx, frame_idx, shown_after_quit, code))
     p.kill_close()
 
     # ---- F-cases: every comparator that can report "ok" above is observed
