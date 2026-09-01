@@ -17,16 +17,22 @@ pointing at a candidate config, so preview and live bar cannot drift.
 
 Config file (``~/.claude/statusline-config.json``)::
 
-    {"items": ["model", "context", ...], "colors": true}
+    {"items": ["model", "context", ...], "colors": true,
+     "scheme": "codex", "item_colors": {"branch": "#87afff"}}
 
 Absent file = all segments in default order. Unknown ids are skipped,
 duplicates dropped, a broken file falls back to the default -- the renderer
 and this tool implement the same forgiving parse. Delete the file to restore
-defaults.
+defaults. Scheme names come from ``node statusline.js --schemes`` (the
+renderer is the only carrier of those too); ``item_colors`` overrides one
+segment's identity accent with a named ansi color or ``#RRGGBB`` hex --
+the picker's accent key cycles the names, hex stays config-file-only, and
+the renderer ignores specs it cannot parse rather than failing the bar.
 
 Keys: up/down move the cursor, space toggles, left/right reorder within the
-enabled block, c toggles colors, v hands off to Claude Code's own statusline
-setup, Enter saves, q/Q/Esc/ctrl-C cancel.
+enabled block, c cycles colors (each scheme, then off), a cycles the selected
+segment's accent override (colorable segments only), v hands off to Claude
+Code's own statusline setup, Enter saves, q/Q/Esc/ctrl-C cancel.
 Modified arrows (e.g. ctrl-right) act as their plain arrow.
 
 ``v`` is a HANDOFF, not a feature: this is a standalone TUI and cannot spawn a
@@ -50,9 +56,11 @@ CLI::
 
     statusline_picker.py              # interactive picker (needs a TTY)
     statusline_picker.py --show       # print registry, config and preview
-    statusline_picker.py --apply "model,context" [--colors on|off]
+    statusline_picker.py --apply "model,context" [--colors on|off] [--scheme NAME]
                                       # save a selection; no TTY needed
     statusline_picker.py --colors off # keep items, set colors only
+    statusline_picker.py --scheme claude-code
+                                      # keep items, switch the color scheme
     statusline_picker.py --selftest
 
 ``--apply`` exists so a caller with no terminal of its own -- a Claude Code
@@ -96,6 +104,14 @@ PREVIEW_TIMEOUT = 10
 # bare ESC and then another key is orders of magnitude slower. This settle
 # window separates the two cases and bounds every mid-sequence read.
 ESC_SETTLE = 0.05
+
+# The accent ring 'a' cycles a segment through: None = the scheme's own slot,
+# then the renderer's named override colors (its NAMED table -- the renderer
+# validates specs, so a name here it does not know would be silently dropped
+# from the bar; the selftest pins the two lists against drift via --schemes'
+# sibling contract note in the docs). Hex specs are config-file-only.
+ACCENT_RING = (None, "red", "green", "yellow", "blue",
+               "magenta", "cyan", "white", "dim")
 
 # Minimal payload for preview when no live probe exists (fresh box). Field
 # shapes follow a probe captured from Claude Code 2.1.245.
@@ -146,8 +162,14 @@ def fetch_registry(node, js):
         )
     try:
         entries = json.loads(out.stdout.decode("utf-8", "replace"))
-        registry = [(str(e["id"]), str(e["label"])) for e in entries]
-    except (ValueError, TypeError, KeyError):
+        # colorable is absent from older renderers; default False so the
+        # accent submode stays off rather than painting segments the
+        # renderer would ignore.
+        registry = [
+            (str(e["id"]), str(e["label"]), bool(e.get("colorable")))
+            for e in entries
+        ]
+    except (ValueError, TypeError, KeyError, AttributeError):
         raise RuntimeError(
             "%s --segments printed something other than the registry: %r"
             % (js, out.stdout[:120])
@@ -155,6 +177,64 @@ def fetch_registry(node, js):
     if not registry:
         raise RuntimeError("empty segment registry from %s" % js)
     return registry
+
+
+def fetch_schemes(node, js):
+    """The renderer is the only carrier of the scheme list too (--schemes).
+    Same failure contract as fetch_registry: every failure mode raises
+    RuntimeError. A renderer too old to know --schemes ignores the flag,
+    reads the empty stdin this call supplies, prints a bar instead of JSON,
+    and lands in the parse error -- a clean mismatch report, not a hang."""
+    try:
+        out = subprocess.run(
+            [node, js, "--schemes"], input=b"", capture_output=True,
+            timeout=PREVIEW_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            "%s --schemes timed out after %ds" % (js, PREVIEW_TIMEOUT)
+        ) from None
+    except OSError as exc:
+        raise RuntimeError("could not launch %s: %s" % (node, exc)) from exc
+    if out.returncode != 0:
+        raise RuntimeError(
+            "%s --schemes exited %d: %s"
+            % (js, out.returncode, out.stderr.decode("utf-8", "replace").strip())
+        )
+    try:
+        raw = json.loads(out.stdout.decode("utf-8", "replace"))
+        # a JSON string or object also parses and would iterate per character
+        # or per key -- only a list of non-empty names is the scheme list
+        if (not isinstance(raw, list)
+                or not all(isinstance(s, str) and s for s in raw)):
+            raise TypeError
+        schemes = raw
+    except (ValueError, TypeError):
+        raise RuntimeError(
+            "%s --schemes printed something other than the scheme list: %r"
+            % (js, out.stdout[:120])
+        ) from None
+    if not schemes:
+        raise RuntimeError("empty scheme list from %s" % js)
+    return schemes
+
+
+def fetch_schemes_or_none(node, js):
+    """Degrading fetch: the scheme list, or None when the renderer cannot
+    answer --schemes. A renderer that answers --segments but not --schemes is
+    version skew (older statusline.js beside a newer picker), and skew must
+    not brick the picker: every path that can proceed without the offer --
+    the TUI, --show, an --apply that names no scheme -- proceeds with
+    known_schemes=None (load_config then preserves the stored scheme
+    verbatim). Only an EXPLICIT --scheme, which cannot be validated blind,
+    stays fatal; that path fetches unwrapped so the refusal can name the
+    reason. Observed before the degrade existed: lab case P5's hung-renderer
+    fixture killed the picker at startup with exit 2, one --schemes call
+    before the first frame."""
+    try:
+        return fetch_schemes(node, js)
+    except RuntimeError:
+        return None
 
 
 def normalize(items, known_ids):
@@ -193,10 +273,22 @@ def parse_apply_items(raw, known_ids):
     return items
 
 
-def load_config(path, known_ids):
-    """(items, colors) with the renderer's fallback: absent/broken file or a
-    non-list items key = all known ids; colors defaults True."""
-    default = (list(known_ids), True)
+def load_config(path, known_ids, known_schemes=("codex",)):
+    """(items, colors, scheme, item_colors) with the renderer's fallback:
+    absent/broken file or a non-list items key = all known ids; colors
+    defaults True; an unknown scheme falls back to the first known one;
+    item_colors keeps only str->str entries but preserves their VALUES
+    opaquely (a hex spec the picker cannot cycle must still round-trip a
+    save untouched -- the renderer is the one that judges specs).
+
+    known_schemes=None means the offer could not be learned (a renderer too
+    old for --schemes): the stored scheme string is then preserved VERBATIM
+    rather than judged -- a caller that cannot see the offer must not rewrite
+    the user's stored choice, and the renderer already treats an unknown
+    scheme as codex at render time, so the value heals when the pair stops
+    skewing."""
+    fallback_scheme = known_schemes[0] if known_schemes else "codex"
+    default = (list(known_ids), True, fallback_scheme, {})
     try:
         with open(path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
@@ -210,10 +302,22 @@ def load_config(path, known_ids):
         if isinstance(raw_items, list)
         else list(known_ids)
     )
-    return items, cfg.get("colors") is not False
+    scheme = cfg.get("scheme")
+    if not isinstance(scheme, str):
+        scheme = fallback_scheme
+    elif known_schemes is not None and scheme not in known_schemes:
+        scheme = fallback_scheme
+    raw_colors = cfg.get("item_colors")
+    item_colors = {}
+    if isinstance(raw_colors, dict):
+        item_colors = {
+            k: v for k, v in raw_colors.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+    return items, cfg.get("colors") is not False, scheme, item_colors
 
 
-def save_config(path, items, colors):
+def save_config(path, items, colors, scheme="codex", item_colors=None):
     """Atomic write via a UNIQUE temp name in the target directory: readers
     (the statusline may render at any moment) see old or new bytes, never
     partial, and two concurrent savers cannot share a temp file -- the later
@@ -224,7 +328,11 @@ def save_config(path, items, colors):
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump({"items": list(items), "colors": bool(colors)}, fh, indent=1)
+            json.dump({
+                "items": list(items), "colors": bool(colors),
+                "scheme": str(scheme),
+                "item_colors": dict(item_colors or {}),
+            }, fh, indent=1)
             fh.write("\n")
         os.replace(tmp, path)
     except BaseException:
@@ -235,7 +343,8 @@ def save_config(path, items, colors):
         raise
 
 
-def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None):
+def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None,
+                   scheme="codex", item_colors=None):
     """Render a candidate selection through the REAL renderer. A renderer that
     fails or hangs degrades to a bracketed notice; it never raises.
 
@@ -255,7 +364,11 @@ def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None):
     fd, cfg_path = tempfile.mkstemp(suffix=".json", dir=tmpdir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump({"items": list(items), "colors": bool(colors)}, fh)
+            json.dump({
+                "items": list(items), "colors": bool(colors),
+                "scheme": str(scheme),
+                "item_colors": dict(item_colors or {}),
+            }, fh)
         env["STATUSLINE_CONFIG"] = cfg_path
         if sandbox_home:
             env["HOME"] = sandbox_home
@@ -436,15 +549,61 @@ def preview_state(live_path, startup_payload, startup_mtime, started_at, now):
 
 class PickerState:
     """Enabled block (render order) + disabled block (canonical order), the
-    same two-block model the Codex picker builds in its constructor."""
+    same two-block model the Codex picker builds in its constructor. Also
+    carries the color state: colors on/off, the active scheme, and the
+    per-item accent overrides ('a' cycles the selected row through the named
+    accents; only rows the registry marks colorable)."""
 
-    def __init__(self, registry, enabled_ids, colors):
-        self.labels = dict(registry)
-        self.canonical = [rid for rid, _ in registry]
+    def __init__(self, registry, enabled_ids, colors,
+                 scheme="codex", item_colors=None, schemes=("codex",)):
+        # registry rows may be (id, label) -- older fixtures/renderers -- or
+        # (id, label, colorable); colorable defaults False.
+        self.labels = {e[0]: e[1] for e in registry}
+        self.canonical = [e[0] for e in registry]
+        self.colorable = {e[0] for e in registry if len(e) > 2 and e[2]}
         self.enabled = [rid for rid in enabled_ids if rid in self.labels]
         self.disabled = [rid for rid in self.canonical if rid not in self.enabled]
         self.colors = bool(colors)
+        self.schemes = list(schemes) or ["codex"]
+        self.scheme = scheme if scheme in self.schemes else self.schemes[0]
+        self.item_colors = dict(item_colors or {})
         self.cursor = 0
+
+    def cycle_colors(self):
+        """One ring: on+scheme1 -> on+scheme2 -> ... -> off -> on+scheme1.
+        Off keeps no scheme memory on purpose -- re-entering the ring at the
+        first scheme is predictable; resuming a remembered one is not."""
+        if not self.colors:
+            self.colors, self.scheme = True, self.schemes[0]
+            return
+        i = self.schemes.index(self.scheme) if self.scheme in self.schemes else 0
+        if i + 1 < len(self.schemes):
+            self.scheme = self.schemes[i + 1]
+        else:
+            self.colors = False
+
+    def cycle_accent(self):
+        """Advance the selected row's accent override: default -> each named
+        accent -> default. Rows the registry does not mark colorable are
+        refused silently -- the renderer would drop the override anyway, and
+        a picker that appears to paint what the bar will not honour lies. A
+        non-cycle value from the config file (a hex spec) re-enters the ring
+        at its start rather than being preserved: pressing 'a' IS the edit."""
+        rows = self.rows()
+        if not rows:
+            return False
+        rid = rows[self.cursor]
+        if rid not in self.colorable:
+            return False
+        cur = self.item_colors.get(rid)
+        ring = ACCENT_RING
+        i = ring.index(cur) if cur in ring else 0
+        nxt = ring[(i + 1) % len(ring)]
+        if nxt is None:
+            self.item_colors.pop(rid, None)
+        else:
+            self.item_colors[rid] = nxt
+        return True
 
     def rows(self):
         return self.enabled + self.disabled
@@ -487,18 +646,23 @@ class PickerState:
 def draw(state, preview, source, write):
     write("\x1b[2J\x1b[H")
     write("statusline picker -- space toggle, left/right reorder, c colors, "
-          "v built-in setup, Enter save, q/Esc cancel\r\n")
+          "a accent, v built-in setup, Enter save, q/Esc cancel\r\n")
     write("\r\npreview: " + preview.replace("\n", "") + "\x1b[0m\r\n")
     write("payload: " + source + "\r\n\r\n")
     for idx, rid in enumerate(state.rows()):
         cursor = ">" if idx == state.cursor else " "
         mark = "x" if rid in state.enabled else " "
         style = "" if rid in state.enabled else "\x1b[2m"
+        accent = state.item_colors.get(rid)
+        tag = (" [%s]" % accent) if accent else ""
         write(
-            "%s [%s] %s%-16s %s\x1b[0m\r\n"
-            % (cursor, mark, style, rid, state.labels[rid])
+            "%s [%s] %s%-16s %s%s\x1b[0m\r\n"
+            % (cursor, mark, style, rid, state.labels[rid], tag)
         )
-    write("\r\ncolors: %s\r\n" % ("on" if state.colors else "off"))
+    # "colors: on"/"colors: off" stays a stable prefix -- lab needles and the
+    # humans reading the pane both key off it; the scheme rides behind it.
+    write("\r\ncolors: %s\r\n"
+          % (("on (%s)" % state.scheme) if state.colors else "off"))
 
 
 def run_picker(state, keys, previewer, write):
@@ -540,8 +704,11 @@ def run_picker(state, keys, previewer, write):
             state.toggle()
             dirty = True
         elif key == "colors":
-            state.colors = not state.colors
+            state.cycle_colors()
             dirty = True
+        elif key == "accent":
+            if state.cycle_accent():
+                dirty = True
         elif key == "customize":
             return "customize"
         elif key == "enter":
@@ -603,6 +770,8 @@ def read_keys_tty(stdin):
                 yield "space"
             elif ch in (b"c", b"C"):
                 yield "colors"
+            elif ch in (b"a", b"A"):
+                yield "accent"
             elif ch in (b"v", b"V"):
                 yield "customize"
             elif ch in (b"q", b"Q", b"\x03"):
@@ -645,6 +814,8 @@ def read_keys_windows(getwch):
             yield "space"
         elif ch in ("c", "C"):
             yield "colors"
+        elif ch in ("a", "A"):
+            yield "accent"
         elif ch in ("v", "V"):
             yield "customize"
         elif ch in ("q", "Q", "\x1b", "\x03"):
@@ -695,17 +866,22 @@ def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
     """One-shot dump: registry, config, preview. Raises RuntimeError /
     OSError / ValueError upward; main prints them as clean exit-2 errors."""
     registry = fetch_registry(node, js)
-    known = [rid for rid, _ in registry]
-    items, colors = load_config(cfg_path, known)
+    known = [e[0] for e in registry]
+    schemes = fetch_schemes_or_none(node, js)
+    items, colors, scheme, item_colors = load_config(cfg_path, known, schemes)
     write("config: %s%s\n" % (cfg_path, "" if os.path.exists(cfg_path) else " (absent -> defaults)"))
-    for rid, label in registry:
+    for entry in registry:
+        rid, label = entry[0], entry[1]
         mark = "x" if rid in items else " "
         pos = str(items.index(rid) + 1) if rid in items else "-"
-        write(" [%s] %-2s %-16s %s\n" % (mark, pos, rid, label))
-    write("colors: %s\n" % ("on" if colors else "off"))
+        accent = item_colors.get(rid)
+        tag = (" [%s]" % accent) if accent else ""
+        write(" [%s] %-2s %-16s %s%s\n" % (mark, pos, rid, label, tag))
+    write("colors: %s\n" % (("on (%s)" % scheme) if colors else "off"))
     payload, sandbox, live, mtime = pick_payload(probe_path, explicit=explicit_payload)
     try:
-        preview = render_preview(node, js, items, colors, payload, sandbox)
+        preview = render_preview(node, js, items, colors, payload, sandbox,
+                                 scheme=scheme, item_colors=item_colors)
     finally:
         if sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
@@ -786,21 +962,43 @@ def selftest():
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "cfg.json")
 
-        # load: absent -> all + colors on
-        check("load absent -> defaults", load_config(cfg, known) == (known, True))
+        # load: absent -> all + colors on + first scheme + no overrides
+        check("load absent -> defaults",
+              load_config(cfg, known) == (known, True, "codex", {}))
         # load: broken -> defaults
         with open(cfg, "w") as fh:
             fh.write("not json")
-        check("load broken -> defaults", load_config(cfg, known) == (known, True))
+        check("load broken -> defaults",
+              load_config(cfg, known) == (known, True, "codex", {}))
         # load: empty items honored, colors false parsed
         with open(cfg, "w") as fh:
             json.dump({"items": [], "colors": False}, fh)
-        check("load honors empty + colors:false", load_config(cfg, known) == ([], False))
+        check("load honors empty + colors:false",
+              load_config(cfg, known) == ([], False, "codex", {}))
         # save/load round-trip, atomic (no *.tmp residue anywhere in the dir --
         # the temp name is unique per writer, so a fixed-suffix probe is blind)
         save_config(cfg, ["b", "a"], True)
-        check("save/load round-trip", load_config(cfg, known) == (["b", "a"], True))
+        check("save/load round-trip",
+              load_config(cfg, known) == (["b", "a"], True, "codex", {}))
         check("save leaves no tmp residue", not [f for f in os.listdir(td) if ".tmp" in f])
+        # scheme + item_colors round-trip; a hex spec the picker cannot cycle
+        # must survive opaquely, and shape-invalid entries must drop one by
+        # one, never the map
+        save_config(cfg, ["a"], True, scheme="mono",
+                    item_colors={"a": "#87afff", "b": "red"})
+        check("scheme+item_colors round-trip",
+              load_config(cfg, known, ("codex", "mono"))
+              == (["a"], True, "mono", {"a": "#87afff", "b": "red"}))
+        check("unknown scheme falls back to first known",
+              load_config(cfg, known, ("codex",))[2] == "codex")
+        # (an int KEY is untestable here: json serializes every object key to
+        # a string, so a non-str key cannot reach load_config through a file)
+        with open(cfg, "w") as fh:
+            json.dump({"items": ["a"], "scheme": 7,
+                       "item_colors": {"a": 3, "b": "blue"}}, fh)
+        check("shape-invalid scheme and override entries drop cleanly",
+              load_config(cfg, known, ("codex", "mono"))
+              == (["a"], True, "codex", {"b": "blue"}))
 
         # state: toggle off -> canonical slot in disabled block, cursor follows
         st = PickerState(registry, ["a", "b", "c"], True)
@@ -843,6 +1041,53 @@ def selftest():
         outcome4b = run_picker(st4b, iter(["space", "customize"]), lambda _s: ("p", "fixture"),
                                lambda _s: None)
         check("customize returns its own outcome", outcome4b == "customize")
+
+        # colors ring: with several schemes, c walks every scheme then off
+        # then re-enters at the first; with the single default scheme it
+        # degrades to the old on/off toggle (pinned above by st3).
+        st5 = PickerState(registry, ["a"], True,
+                          schemes=("codex", "claude-code", "mono"))
+        seen = [(st5.colors, st5.scheme)]
+        for _ in range(4):
+            st5.cycle_colors()
+            seen.append((st5.colors, st5.scheme))
+        check("colors ring walks schemes, off, then round",
+              seen == [(True, "codex"), (True, "claude-code"), (True, "mono"),
+                       (False, "mono"), (True, "codex")])
+
+        # accent ring on a colorable row: default -> red, and a full lap
+        # lands back on default (override removed, not set to None)
+        reg3 = [("a", "A", True), ("b", "B", False)]
+        st6 = PickerState(reg3, ["a", "b"], True)
+        check("accent cycles the selected colorable row",
+              st6.cycle_accent() and st6.item_colors == {"a": "red"})
+        for _ in range(len(ACCENT_RING) - 1):
+            st6.cycle_accent()
+        check("a full accent lap clears the override",
+              st6.item_colors == {})
+        # non-colorable row: refused, no override, no dirty signal
+        st6.cursor = 1
+        check("accent refused on a non-colorable row",
+              st6.cycle_accent() is False and st6.item_colors == {})
+        # a hex spec from the config file re-enters the ring at its start
+        st7 = PickerState(reg3, ["a"], True, item_colors={"a": "#87afff"})
+        st7.cycle_accent()
+        check("hex override re-enters the ring at red",
+              st7.item_colors == {"a": "red"})
+
+        # the accent key through the real state machine: paint row a, save
+        st8 = PickerState(reg3, ["a", "b"], True)
+        outcome8 = run_picker(st8, iter(["accent", "accent", "enter"]),
+                              lambda _s: ("p", "fixture"), lambda _s: None)
+        check("scripted run saves an accented row",
+              outcome8 == "saved" and st8.item_colors == {"a": "green"})
+        # draw shows the override tag beside the row and the scheme in the
+        # colors line
+        frames = []
+        draw(st8, "p", "fixture", frames.append)
+        joined = "".join(frames)
+        check("draw tags the accented row and names the scheme",
+              "[green]" in joined and "colors: on (codex)" in joined)
         check("customize is distinguishable from cancel", outcome4b != "cancelled")
         # exhausted key stream (no Enter) must not save either
         st5 = PickerState(registry, ["a"], True)
@@ -1002,8 +1247,14 @@ def selftest():
             # registry fetch contract against the real renderer, when present
             if os.path.exists(DEFAULT_JS):
                 reg = fetch_registry(node, DEFAULT_JS)
-                check("live registry: >=8 id+label pairs",
-                      len(reg) >= 8 and all(r and l for r, l in reg))
+                check("live registry: >=8 id+label+colorable rows",
+                      len(reg) >= 8 and all(e[0] and e[1] for e in reg)
+                      and any(e[2] for e in reg)
+                      and not all(e[2] for e in reg))
+                check("live schemes: codex first, claude-code and mono known",
+                      fetch_schemes(node, DEFAULT_JS)[:1] == ["codex"]
+                      and {"claude-code", "mono"}
+                      <= set(fetch_schemes(node, DEFAULT_JS)))
 
                 # --apply end to end, both polarities. The known-bad arm is the
                 # whole point: a refusal must leave NOTHING on disk, because a
@@ -1018,7 +1269,7 @@ def selftest():
                 check("apply e2e: unknown id exits 2 naming it, writes nothing",
                       bad.returncode == 2 and "bogus-id" in bad.stderr
                       and not os.path.exists(e2e_cfg))
-                first_two = [rid for rid, _ in reg][:2]
+                first_two = [e[0] for e in reg][:2]
                 good = subprocess.run(
                     [sys.executable, os.path.abspath(__file__),
                      "--apply", ",".join(first_two), "--colors", "off",
@@ -1026,8 +1277,8 @@ def selftest():
                     capture_output=True, text=True)
                 check("apply e2e: saves exactly the selection, colors off",
                       good.returncode == 0
-                      and load_config(e2e_cfg, [r for r, _ in reg])
-                      == (first_two, False))
+                      and load_config(e2e_cfg, [e[0] for e in reg])
+                      == (first_two, False, "codex", {}))
                 # --colors alone edits colors and keeps the saved items
                 flip = subprocess.run(
                     [sys.executable, os.path.abspath(__file__),
@@ -1035,8 +1286,79 @@ def selftest():
                     capture_output=True, text=True)
                 check("apply e2e: --colors alone keeps items, flips colors",
                       flip.returncode == 0
-                      and load_config(e2e_cfg, [r for r, _ in reg])
-                      == (first_two, True))
+                      and load_config(e2e_cfg, [e[0] for e in reg])
+                      == (first_two, True, "codex", {}))
+
+                # Renderer skew: a renderer that answers --segments but not
+                # --schemes (an older statusline.js beside a newer picker)
+                # must degrade, not brick. Contract: implicit paths proceed
+                # and PRESERVE the stored scheme string verbatim; only an
+                # EXPLICIT --scheme, which cannot be validated, is fatal.
+                skew_js = os.path.join(td, "skew.js")
+                with open(skew_js, "w") as fh:
+                    fh.write(
+                        "if (process.argv.includes('--segments')) {"
+                        "process.stdout.write(JSON.stringify("
+                        "[{id:'alpha',label:'Alpha',colorable:true},"
+                        "{id:'beta',label:'Beta'}])); process.exit(0); }\n"
+                        "if (process.argv.includes('--schemes')) {"
+                        "process.stderr.write('unknown flag'); process.exit(1); }\n"
+                        "process.stdin.resume();"
+                        "process.stdin.on('end', () => process.stdout.write('bar'));\n")
+                skew_cfg = os.path.join(td, "skew-cfg.json")
+                with open(skew_cfg, "w") as fh:
+                    json.dump({"items": ["alpha"], "scheme": "zebra"}, fh)
+                try:
+                    skew_load = load_config(skew_cfg, ["alpha", "beta"], None)
+                except TypeError:  # observed red 2026-09-01: `in None` raised
+                    skew_load = None
+                check("skew: unknowable scheme offer preserves the stored string",
+                      skew_load is not None and skew_load[2] == "zebra")
+                skew_apply = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--apply", "beta,alpha", "--config", skew_cfg,
+                     "--js", skew_js],
+                    capture_output=True, text=True)
+                check("skew: plain --apply saves and keeps the stored scheme",
+                      skew_apply.returncode == 0
+                      and json.load(open(skew_cfg)).get("scheme") == "zebra"
+                      and json.load(open(skew_cfg)).get("items")
+                      == ["beta", "alpha"])
+                skew_strict = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--scheme", "mono", "--config", skew_cfg,
+                     "--js", skew_js],
+                    capture_output=True, text=True)
+                check("skew: explicit --scheme is fatal when unvalidatable",
+                      skew_strict.returncode == 2
+                      and "cannot validate --scheme" in skew_strict.stderr)
+                # --schemes must answer with a LIST of scheme names. A string
+                # is also valid JSON and iterates per character, a dict per
+                # key -- either would let --scheme validate against garbage
+                # the renderer never offered.
+                shape_js = os.path.join(td, "shape.js")
+                with open(shape_js, "w") as fh:
+                    fh.write(
+                        "if (process.argv.includes('--schemes')) {"
+                        "process.stdout.write(JSON.stringify('abc'));"
+                        "process.exit(0); }\n")
+                try:
+                    shape_got = fetch_schemes(node, shape_js)
+                except RuntimeError:
+                    shape_got = None
+                check("schemes fetch rejects a non-list JSON answer",
+                      shape_got is None)
+                # the degrade ring built from the preserved scheme: c must
+                # cycle scheme -> off -> scheme without ever renaming it
+                st_deg = PickerState([("a", "A", True)], ["a"], True,
+                                     scheme="zebra", schemes=("zebra",))
+                deg_walk = [(st_deg.colors, st_deg.scheme)]
+                for _ in range(2):
+                    st_deg.cycle_colors()
+                    deg_walk.append((st_deg.colors, st_deg.scheme))
+                check("degrade ring: preserved scheme cycles to off and back",
+                      deg_walk == [(True, "zebra"), (False, "zebra"),
+                                   (True, "zebra")])
             else:
                 print("SKIP: live registry (no %s)" % DEFAULT_JS)
         else:
@@ -1077,6 +1399,10 @@ def selftest():
             check("pty reader: v yields customize", next(gen) == "customize")
             os.write(master, b"V")
             check("pty reader: V yields customize", next(gen) == "customize")
+            os.write(master, b"a")
+            check("pty reader: a yields accent", next(gen) == "accent")
+            os.write(master, b"A")
+            check("pty reader: A yields accent", next(gen) == "accent")
             os.write(master, b"\x1bq")
             check("pty reader: alt-chord discarded whole", next(gen) == "other")
             os.write(master, b"q")
@@ -1119,13 +1445,13 @@ def selftest():
         return getwch
 
     win_script = ["\xe0", "H", "\x00", "P", "\xe0", "K", "\xe0", "M",
-                  "\xe0", "G", " ", "\r", "c", "C", "v", "x", "q",
+                  "\xe0", "G", " ", "\r", "c", "C", "a", "A", "v", "x", "q",
                   "\x1b", "KBI", "\x03"]
     check("windows reader: full token mapping",
           list(read_keys_windows(scripted_console(win_script)))
           == ["up", "down", "left", "right", "other", "space", "enter",
-              "colors", "colors", "customize", "quit", "quit", "quit",
-              "quit"])
+              "colors", "colors", "accent", "accent", "customize", "quit",
+              "quit", "quit", "quit"])
     check("windows reader: stream ends cleanly at console EOF",
           list(read_keys_windows(scripted_console([]))) == [])
     check("windows reader: EOF inside a special-key pair ends, no fallthrough",
@@ -1180,6 +1506,10 @@ def main():
                     help="set colors when saving via --apply, or alone to change "
                          "colors while keeping the current items; absent = keep "
                          "the current value")
+    ap.add_argument("--scheme", metavar="NAME",
+                    help="set the color scheme when saving (alone or with "
+                         "--apply/--colors); names come from the renderer's "
+                         "--schemes list, unknown ones are refused with exit 2")
     ap.add_argument("--js", default=DEFAULT_JS, help="statusline renderer path")
     ap.add_argument("--config", default=DEFAULT_CONFIG, help="config file to edit")
     ap.add_argument("--payload", default=DEFAULT_PROBE,
@@ -1198,9 +1528,9 @@ def main():
         print("error: renderer not found: %s" % args.js, file=sys.stderr)
         sys.exit(2)
 
-    if args.show and (args.apply is not None or args.colors):
-        print("error: --show does not combine with --apply/--colors "
-              "(one reads, the other writes)", file=sys.stderr)
+    if args.show and (args.apply is not None or args.colors or args.scheme is not None):
+        print("error: --show does not combine with --apply/--colors/--scheme "
+              "(one reads, the others write)", file=sys.stderr)
         sys.exit(2)
 
     if args.show:
@@ -1212,7 +1542,7 @@ def main():
             sys.exit(2)
         sys.exit(0)
 
-    if args.apply is not None or args.colors:
+    if args.apply is not None or args.colors or args.scheme is not None:
         # The non-interactive save path. Reaches neither the TTY probe nor the
         # termios import below on purpose: this is the path a caller with no
         # terminal -- an AskUserQuestion-built selection, native Windows -- saves
@@ -1223,8 +1553,16 @@ def main():
         except RuntimeError as exc:
             print("error: %s" % exc, file=sys.stderr)
             sys.exit(2)
-        known = [rid for rid, _ in registry]
-        items, colors = load_config(args.config, known)
+        known = [e[0] for e in registry]
+        try:
+            schemes = fetch_schemes(node, args.js)
+            schemes_err = None
+        except RuntimeError as exc:
+            # degrade, except under an explicit --scheme (checked below):
+            # a plain --apply/--colors must survive renderer skew, and
+            # load_config(None) preserves the stored scheme verbatim
+            schemes, schemes_err = None, exc
+        items, colors, scheme, item_colors = load_config(args.config, known, schemes)
         if args.apply is not None:
             try:
                 items = parse_apply_items(args.apply, known)
@@ -1233,14 +1571,26 @@ def main():
                 sys.exit(2)
         if args.colors:
             colors = args.colors == "on"
+        if args.scheme is not None:
+            # strict like --apply: an explicit instruction silently repaired
+            # would save a look the caller never asked for
+            if schemes is None:
+                print("error: cannot validate --scheme %r: %s"
+                      % (args.scheme, schemes_err), file=sys.stderr)
+                sys.exit(2)
+            if args.scheme not in schemes:
+                print("error: unknown scheme %r (renderer offers: %s)"
+                      % (args.scheme, ", ".join(schemes)), file=sys.stderr)
+                sys.exit(2)
+            scheme = args.scheme
         try:
-            save_config(args.config, items, colors)
+            save_config(args.config, items, colors, scheme, item_colors)
         except OSError as exc:
             print("error: could not save %s: %s" % (args.config, exc), file=sys.stderr)
             sys.exit(2)
         print("saved %s" % args.config)
         print("items:  %s" % (", ".join(items) or "(none -- empty line)"))
-        print("colors: %s" % ("on" if colors else "off"))
+        print("colors: %s" % (("on (%s)" % scheme) if colors else "off"))
         print("takes effect on the next statusline refresh; delete the file to restore defaults")
         sys.exit(0)
 
@@ -1286,9 +1636,18 @@ def main():
     except RuntimeError as exc:
         print("error: %s" % exc, file=sys.stderr)
         sys.exit(2)
-    known = [rid for rid, _ in registry]
-    items, colors = load_config(args.config, known)
-    state = PickerState(registry, items, colors)
+    known = [e[0] for e in registry]
+    schemes = fetch_schemes_or_none(node, args.js)
+    items, colors, scheme, item_colors = load_config(args.config, known, schemes)
+    # Degrade ring is (scheme,), not ("codex",): PickerState normalizes a
+    # scheme outside its ring to the ring's first entry, so a codex ring would
+    # rewrite a preserved stored scheme on the next save -- measured
+    # 2026-09-01: an untouched interactive save under skew turned a stored
+    # "zebra" into "codex". The one-entry ring keeps c usable (scheme -> off
+    # -> scheme) while never claiming schemes the offer could not confirm.
+    state = PickerState(registry, items, colors, scheme=scheme,
+                        item_colors=item_colors,
+                        schemes=schemes or (scheme,))
     started_at = time.time()
     try:
         payload, sandbox, live_path, startup_mtime = pick_payload(
@@ -1303,7 +1662,8 @@ def main():
         data, label = preview_state(live_path, payload, startup_mtime,
                                     started_at, time.time())
         return render_preview(node, args.js, st.enabled, st.colors,
-                              data, sandbox), label
+                              data, sandbox, scheme=st.scheme,
+                              item_colors=st.item_colors), label
 
     def write_flush(s):
         sys.stdout.write(s)
@@ -1337,14 +1697,15 @@ def main():
         # directory is the opposite: environmental, and retrying after fixing
         # it is exactly right. So it has to land on 2.
         try:
-            save_config(args.config, state.enabled, state.colors)
+            save_config(args.config, state.enabled, state.colors,
+                        state.scheme, state.item_colors)
         except OSError as exc:
             print("error: could not save %s: %s" % (args.config, exc),
                   file=sys.stderr)
             sys.exit(2)
         print("saved %s" % args.config)
         print("items:  %s" % (", ".join(state.enabled) or "(none -- empty line)"))
-        print("colors: %s" % ("on" if state.colors else "off"))
+        print("colors: %s" % (("on (%s)" % state.scheme) if state.colors else "off"))
         print("takes effect on the next statusline refresh; delete the file to restore defaults")
     elif outcome == "customize":
         # Deliberately says what the human asked for, not what should happen

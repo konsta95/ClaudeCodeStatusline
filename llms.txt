@@ -1,6 +1,6 @@
 # ClaudeCodeStatusline
 
-> Interactive status line picker for Claude Code: customize what the status line shows — toggle, reorder and live-preview components in a terminal UI, then save; the renderer picks the change up on its next refresh without restarting the session.
+> Interactive status line picker for Claude Code: customize what the status line shows — toggle, reorder, colour-scheme and live-preview components in a terminal UI, then save; the renderer picks the change up on its next refresh without restarting the session.
 
 A working prototype demonstrating that a built-in `/statusline` picker is mostly
 assembly-and-UI over data Claude Code already computes on every render. Node.js renderer
@@ -11,14 +11,14 @@ output). MIT licensed.
 ## Core
 
 - [README](https://github.com/konsta95/ClaudeCodeStatusline#readme): what it does and why, install, key bindings, exit codes, the configuration contract, and the payload fields observed on Claude Code 2.1.247
-- [statusline.js](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline.js): the self-describing renderer — the component registry lives here alone, and the picker discovers it with `node statusline.js --segments`
-- [statusline_picker.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline_picker.py): the interactive picker; `--show` (optionally with `--payload FILE`), `--selftest` and the non-interactive save path `--apply "id1,id2" [--colors on|off]` all run without a TTY, on any platform
+- [statusline.js](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline.js): the self-describing renderer — the component registry and the colour-scheme list live here alone, and the picker discovers them with `node statusline.js --segments` / `--schemes`
+- [statusline_picker.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline_picker.py): the interactive picker; `--show` (optionally with `--payload FILE`), `--selftest` and the non-interactive save path `--apply "id1,id2" [--colors on|off] [--scheme NAME]` all run without a TTY, on any platform
 - [commands/statusline.md](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/commands/statusline.md): a `/statusline` slash command that picks via AskUserQuestion popups rendered over the input box (saving through `--apply`), and on request opens the full picker in a tmux pane, reading its exit code back through a sentinel file
-- [statusline-config.example.json](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline-config.example.json): an example of the five-rule configuration contract
+- [statusline-config.example.json](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/statusline-config.example.json): an example of the seven-rule configuration contract
 
 ## Evidence
 
-- [lab/picker_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/picker_lab.py): pty regression lab — 28 cases driving the real picker binary under sandboxed HOME directories, with the observed-failing pre-fix log kept beside the post-fix log
+- [lab/picker_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/picker_lab.py): pty regression lab — 29 cases driving the real picker binary under sandboxed HOME directories, with the observed-failing pre-fix log kept beside the post-fix log
 - [lab/exit_contract_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/exit_contract_lab.py): pins that environmental failures exit 2 and are never relabelled as picker defects (exit 1)
 - [lab/carrier_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/carrier_lab.py): eleven live tmux arms over the pane-and-sentinel handoff, extracted from the shipped slash command rather than retyped
 - [lab/save_failure_probe.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/save_failure_probe.py): proves a failed save writes nothing, measured against a genuinely unsavable directory

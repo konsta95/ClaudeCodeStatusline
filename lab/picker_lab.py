@@ -474,6 +474,47 @@ def main():
     evidence("N1b-fixture-version", "ok",
              "fixture preview version segment renders as %r" % (vseg or plain.splitlines()[-1:]))
 
+    # ---- N14: the scheme contract end-to-end — a scheme chosen through the
+    # real --apply/--scheme path must reach the PREVIEW bytes through the real
+    # renderer, an item_colors override must layer on top, and a garbage
+    # override doctored straight into the file (past the picker's own
+    # validation) must die at the renderer's load, never leak into the bar.
+    # The needle is the claude-code sep slot 38;2;80;80;80 — codex renders the
+    # separator as plain \x1b[2m, so the byte sequence appears iff the scheme
+    # survived save -> load -> candidate config -> renderer. Verified against
+    # two known-bads before trusting: a picker whose show() pins scheme="codex"
+    # loses the sep needle; a renderer whose loadConfig skips colorSpec leaks
+    # the literal garbage string into the output.
+    home = make_home("n14")
+    canonical_probe(home)
+    apply_rc = run_show(home, ["--apply", "model,context,session",
+                               "--scheme", "claude-code"]).returncode
+    applied = apply_rc == 0
+    cfg14_path = os.path.join(home, ".claude", "statusline-config.json")
+    try:
+        cfg14 = json.load(open(cfg14_path))
+    except (OSError, ValueError):
+        cfg14 = {}
+    saved_scheme = cfg14.get("scheme") == "claude-code"
+    cfg14["item_colors"] = {"session": "#87afff", "model": "not-a-color",
+                            "bogus": "red"}
+    with open(cfg14_path, "w") as fh:
+        json.dump(cfg14, fh)
+    out = run_show(home, ["--show"])
+    # Scope every needle to the rendered bar itself. The listing above it
+    # legitimately prints the raw override spec as a row tag ("[not-a-color]"),
+    # so an unscoped search would flag the picker's own honest echo as a
+    # renderer leak (observed doing exactly that on the first mutant run).
+    bar = b"".join(line for line in out.stdout.splitlines()
+                   if line.startswith(b"preview:"))
+    sep_hit = b"\x1b[38;2;80;80;80m" in bar
+    override_hit = b"\x1b[38;2;135;175;255m" in bar  # #87afff
+    garbage_leak = b"not-a-color" in bar
+    ok14 = applied and saved_scheme and sep_hit and override_hit and not garbage_leak
+    evidence("N14-scheme-e2e", "ok" if ok14 else "FINDING",
+             "apply-rc=%d saved-scheme=%s sep-needle=%s override=%s garbage-leak=%s"
+             % (apply_rc, saved_scheme, sep_hit, override_hit, garbage_leak))
+
     # ---- P0: key pressed the instant the first frame lands — before raw-mode
     # entry. tty.setraw defaults to TCSAFLUSH, which DISCARDS pending input, so
     # a fast keypress in the launch window may be silently dropped.
@@ -714,16 +755,19 @@ def main():
     if h1 == h2:
         lab_error("F1", "sha comparator blind")
 
-    # F2 flips P3/P4's colors-flip detector: a REAL c press must show colors: off.
+    # F2 flips P3/P4's colors-flip detector: a REAL walk around the scheme
+    # ring must land the colors line on off. One c used to be enough; c now
+    # cycles codex -> claude-code -> mono -> off against the real renderer's
+    # three schemes, so the walk sends four.
     home = make_home("f2")
     p = PtyPicker(home)
     p.read_until(b"colors: on", 15)
     p.drain()
-    p.send(b"c")
-    frame = p.read_until(b"colors:", 5)
+    p.send(b"cccc")
+    frame = p.read_until(b"colors: off", 10)
     fired = b"colors: off" in frame
     evidence("F2-colors-flip", "FLIPPED" if fired else "LAB-DEAD",
-             "plain c toggles the colors line: %s" % fired)
+             "c-walk around the scheme ring reaches colors: off: %s" % fired)
     if not fired:
         lab_error("F2", "colors detector blind")
     p.send(b"q")

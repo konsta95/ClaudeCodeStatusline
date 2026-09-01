@@ -46,6 +46,77 @@ const C = {
   clay: '\x1b[38;2;215;119;87m',
 };
 
+const rgb = (r, g, b) => '\x1b[38;2;' + r + ';' + g + ';' + b + 'm';
+
+// ── Color schemes ───────────────────────────────────────────────────────────
+// A scheme fills the SAME semantic slots; builders never name a color
+// directly, so a scheme is data and per-item overrides can layer over it.
+// Slots: path (directory / repo), branch, github, label (5h/7d), model,
+// session, cost, sep, dim, fast, ok/mid/high (the one pressure scale),
+// fresh/stale (version freshness).
+//   codex        the original look described above — NORMAL ansi so the
+//                terminal theme decides hues, clay the one truecolor
+//                exception.
+//   claude-code  the Claude Code TUI's own dark theme, measured out of the
+//                installed binary (bin/claude.exe, read 2026-09-01); the
+//                source theme key is quoted beside each slot. All truecolor
+//                by design — the point is the CLI's exact hues.
+//   mono         no accents at all: every slot empty, pressure told by the
+//                numbers alone. paint() below emits ZERO bytes for empty
+//                slots, so mono output is byte-clean, not reset-littered.
+const SCHEMES = {
+  codex: {
+    path: C.green, branch: C.magenta, github: C.magenta, label: C.magenta,
+    model: C.clay, session: C.white, cost: C.green, sep: C.dim, dim: C.dim,
+    fast: C.dim, ok: C.green, mid: C.yellow, high: C.red,
+    fresh: C.green, stale: C.yellow,
+  },
+  'claude-code': {
+    path: rgb(71, 130, 200),      // 'ide'
+    branch: rgb(175, 135, 255),   // 'autoAccept'
+    github: rgb(177, 185, 249),   // 'permission'
+    label: rgb(177, 185, 249),    // 'permission'
+    model: rgb(215, 119, 87),     // 'claude' — the clay itself
+    session: rgb(153, 153, 153),  // 'inactive'
+    cost: rgb(78, 186, 101),      // 'success'
+    sep: rgb(80, 80, 80),         // 'subtle'
+    dim: C.dim,
+    fast: rgb(255, 106, 0),       // 'fastMode'
+    ok: rgb(78, 186, 101),        // 'success'
+    mid: rgb(255, 193, 7),        // 'warning'
+    high: rgb(255, 107, 128),     // 'error'
+    fresh: rgb(78, 186, 101),     // 'success'
+    stale: rgb(255, 193, 7),      // 'warning'
+  },
+  mono: {
+    path: '', branch: '', github: '', label: '', model: '', session: '',
+    cost: '', sep: '', dim: '', fast: '', ok: '', mid: '', high: '',
+    fresh: '', stale: '',
+  },
+};
+
+// Wrap text in a color only when the slot actually carries one — an empty
+// slot must contribute zero escape bytes.
+function paint(code, text) {
+  return code ? code + text + C.reset : text;
+}
+
+// Per-item override spec: a named normal-intensity ansi color or "#RRGGBB".
+// Anything else resolves to null and the scheme slot stands — a typo in the
+// config must never take the bar down or leak half an escape sequence.
+const NAMED = {
+  red: C.red, green: C.green, yellow: C.yellow, magenta: C.magenta,
+  white: C.white, dim: C.dim, blue: '\x1b[34m', cyan: '\x1b[36m',
+};
+function colorSpec(spec) {
+  if (typeof spec !== 'string') return null;
+  if (Object.prototype.hasOwnProperty.call(NAMED, spec)) return NAMED[spec];
+  const m = spec.match(/^#([0-9a-fA-F]{6})$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return rgb((n >> 16) & 255, (n >> 8) & 255, n & 255);
+}
+
 // "105K", "1M" — capital K, matching the "999K/1M" reading style.
 function fmtTokens(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
@@ -53,24 +124,25 @@ function fmtTokens(n) {
   return String(n);
 }
 
-// One three-step escalative scale for every pressure readout: <50 green,
-// <75 yellow, >=75 red. Context, rate limits, and numeric effort levels all ride
-// this scale, so a colour always means the same amount of pressure regardless of
-// which segment it appears in.
-function pctColor(pct) {
-  return pct >= 75 ? C.red : pct >= 50 ? C.yellow : C.green;
+// One three-step escalative scale for every pressure readout: <50 ok,
+// <75 mid, >=75 high, in the active scheme's hues. Context, rate limits, and
+// numeric effort levels all ride this scale, so a colour always means the
+// same amount of pressure regardless of which segment it appears in. Pressure
+// colors stay semantic: per-item overrides never touch them.
+function pctColor(pct, pal) {
+  return pct >= 75 ? pal.high : pct >= 50 ? pal.mid : pal.ok;
 }
 
-// The five effort levels compress onto the same three steps: low green,
-// medium/high yellow, xhigh/max red. An unrecognized level falls back to dim —
+// The five effort levels compress onto the same three steps: low ok,
+// medium/high mid, xhigh/max high. An unrecognized level falls back to dim —
 // Claude's native footer renders effort dim, so no false alarm and no stray hue.
-function effortColor(level) {
-  if (Number.isFinite(level)) return pctColor(level);
+function effortColor(level, pal) {
+  if (Number.isFinite(level)) return pctColor(level, pal);
   const s = String(level).toLowerCase();
-  if (s === 'xhigh' || s === 'max') return C.red;
-  if (s === 'medium' || s === 'high') return C.yellow;
-  if (s === 'low') return C.green;
-  return C.dim;
+  if (s === 'xhigh' || s === 'max') return pal.high;
+  if (s === 'medium' || s === 'high') return pal.mid;
+  if (s === 'low') return pal.ok;
+  return pal.dim;
 }
 
 // Find the git root by walking upward; read the branch straight from .git/HEAD
@@ -100,12 +172,51 @@ function gitInfo(startDir) {
   return null;
 }
 
+// GitHub org/repo from the origin remote, spawn-free: .git/config is read
+// directly (bounded file reads; a linked worktree's config lives in the
+// common git dir, reached through its commondir pointer file). Repos without
+// an origin, and origins that are not github, yield null — the segment stays
+// off the line rather than guessing.
+function gitRemote(startDir) {
+  let dir = startDir;
+  for (let i = 0; i < 12 && dir; i++) {
+    const gitPath = path.join(dir, '.git');
+    try {
+      const st = fs.statSync(gitPath);
+      let gitDir = gitPath;
+      if (st.isFile()) {
+        const m = fs.readFileSync(gitPath, 'utf8').match(/gitdir:\s*(.+)/);
+        if (!m) return null;
+        gitDir = path.resolve(dir, m[1].trim());
+      }
+      let cfg = path.join(gitDir, 'config');
+      if (!fs.existsSync(cfg)) {
+        const common = path.join(gitDir, 'commondir');
+        cfg = path.join(
+          path.resolve(gitDir, fs.readFileSync(common, 'utf8').trim()),
+          'config');
+      }
+      const text = fs.readFileSync(cfg, 'utf8');
+      const sec = text.match(/\[remote "origin"\][^[]*/);
+      if (!sec) return null;
+      const url = sec[0].match(/url\s*=\s*(.+)/);
+      if (!url) return null;
+      const gh = url[1].trim().match(/github\.com[:/]+([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/);
+      return gh ? gh[1] : null;
+    } catch (_) { /* no .git or unreadable config — keep walking up */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 // Context tokens from the payload's context_window field, rendered "100K/1M" — no fill
 // bar, no percent. The CLI computes total_input_tokens as input + cache_creation +
 // cache_read and states the window size directly, so neither has to be derived from the
 // transcript. The whole span escalates on the three-step scale; missing token fields mean
 // the segment is omitted — no crash, no fallback to transcript parsing.
-function contextSeg(cw) {
+function contextSeg(cw, pal) {
   if (!cw) return null;
   const size = cw.context_window_size;
   const used = cw.total_input_tokens;
@@ -113,7 +224,7 @@ function contextSeg(cw) {
   let pct = cw.used_percentage;
   if (!Number.isFinite(pct)) pct = (used / size) * 100;
   const p = Math.max(0, Math.min(100, Math.round(pct)));
-  return pctColor(p) + fmtTokens(used) + '/' + fmtTokens(size) + C.reset;
+  return paint(pctColor(p, pal), fmtTokens(used) + '/' + fmtTokens(size));
 }
 
 // Rate-limit windows (5h / 7d). Only five_hour and seven_day reach the statusline — the API's
@@ -122,12 +233,13 @@ function contextSeg(cw) {
 // but null*100 === 0, so empty data is indistinguishable from a genuine 0% — nothing in the
 // payload separates them. 0% is shown as-is (a fresh 5h window really is ~0%); the guard
 // below covers the cases that ARE distinguishable: missing field, NaN, wrong type.
-// The label is identity, the number is pressure: label on the static Limit accent,
-// percentage on the three-step scale.
-function limitSeg(label, win) {
+// The label is identity, the number is pressure: label on the Limit accent
+// (per-item overridable), percentage on the three-step scale (never
+// overridable).
+function limitSeg(label, win, pal, labelColor) {
   if (!win || !Number.isFinite(win.used_percentage)) return null;
   const p = Math.max(0, Math.round(win.used_percentage));
-  return C.magenta + label + C.reset + ' ' + pctColor(p) + p + '%' + C.reset;
+  return paint(labelColor, label) + ' ' + paint(pctColor(p, pal), p + '%');
 }
 
 // Locate the `claude` executable without spawning anything: an explicit override first,
@@ -155,7 +267,7 @@ function findClaudeBin() {
 // underneath a long-lived session is invisible otherwise, and the session keeps running the
 // old build for hours. Spawn-free like the rest of the script: realpath plus one
 // package.json read, with every error skipped rather than raised.
-function versionSeg(running) {
+function versionSeg(running, pal) {
   if (typeof running !== 'string' || !running) return null;
   let fresh = null;
   try {
@@ -167,11 +279,11 @@ function versionSeg(running) {
     }
   } catch (_) { /* install unreadable — show just the running version */ }
   if (fresh && fresh !== running) {
-    return C.yellow + 'v' + running + '→' + fresh + ' restart' + C.reset;
+    return paint(pal.stale, 'v' + running + '→' + fresh + ' restart');
   }
-  if (fresh === running) return C.green + 'v' + running + C.reset;
-  // install unreadable: freshness unverified, so neither green nor yellow is honest
-  return C.dim + 'v' + running + C.reset;
+  if (fresh === running) return paint(pal.fresh, 'v' + running);
+  // install unreadable: freshness unverified, so neither fresh nor stale is honest
+  return paint(pal.dim, 'v' + running);
 }
 
 // ── Segment registry + selection config ─────────────────────────────────────
@@ -181,22 +293,34 @@ function versionSeg(running) {
 // order. An empty items array is a deliberate choice (an empty line), not an error state.
 // STATUSLINE_CONFIG overrides the path: the picker previews a candidate config through THIS
 // same renderer, so a preview cannot drift away from the real line.
+// Third column: colorable — whether item_colors may override the segment's
+// identity accent. context and version are pure semantics (pressure and
+// freshness), so an override there would repaint meaning, not identity.
 const SEGMENTS = [
-  ['git-branch', 'Repo + branch (dir when not a repo)'],
-  ['model', 'Model + effort + fast'],
-  ['context', 'Context tokens used/window'],
-  ['five-hour-limit', '5h rate limit'],
-  ['weekly-limit', '7d rate limit'],
-  ['session', 'Session full id'],
-  ['cost', 'Session cost USD'],
-  ['version', 'Version + install skew'],
+  ['git-branch', 'Repo + branch fused (dir when not a repo)', true],
+  ['directory', 'Directory name', true],
+  ['branch', 'Git branch (repos only)', true],
+  ['github', 'GitHub org/repo from origin', true],
+  ['model', 'Model + effort + fast', true],
+  ['context', 'Context tokens used/window', false],
+  ['five-hour-limit', '5h rate limit', true],
+  ['weekly-limit', '7d rate limit', true],
+  ['session', 'Session full id', true],
+  ['cost', 'Session cost USD', true],
+  ['version', 'Version + install skew', false],
 ];
 const SEGMENT_IDS = SEGMENTS.map((s) => s[0]);
+const COLORABLE = new Set(SEGMENTS.filter((s) => s[2]).map((s) => s[0]));
+// The granular git segments are opt-in: the no-config default keeps the
+// original eight, so an existing bar renders byte-identically after an
+// upgrade. Toggling directory/branch/github on is the picker's job.
+const DEFAULT_IDS = SEGMENT_IDS.filter(
+  (id) => id !== 'directory' && id !== 'branch' && id !== 'github');
 const CONFIG_PATH = process.env.STATUSLINE_CONFIG
   || path.join(os.homedir(), '.claude', 'statusline-config.json');
 
 function loadConfig() {
-  const def = { items: SEGMENT_IDS.slice(), colors: true };
+  const def = { items: DEFAULT_IDS.slice(), colors: true, scheme: 'codex', itemColors: {} };
   let text;
   try { text = fs.readFileSync(CONFIG_PATH, 'utf8'); } catch (_) { return def; }
   try {
@@ -204,13 +328,35 @@ function loadConfig() {
     const items = Array.isArray(cfg.items)
       ? cfg.items.filter((id, i) => SEGMENT_IDS.includes(id) && cfg.items.indexOf(id) === i)
       : def.items;
-    return { items, colors: cfg.colors !== false };
+    const scheme = typeof cfg.scheme === 'string'
+      && Object.prototype.hasOwnProperty.call(SCHEMES, cfg.scheme)
+      ? cfg.scheme : 'codex';
+    // item_colors: {"segment-id": "green" | "#87afff", ...} — unknown ids,
+    // non-colorable ids and unparseable specs are dropped one by one, never
+    // the whole map and never the line.
+    const itemColors = {};
+    if (cfg.item_colors && typeof cfg.item_colors === 'object' && !Array.isArray(cfg.item_colors)) {
+      for (const id of Object.keys(cfg.item_colors)) {
+        const code = colorSpec(cfg.item_colors[id]);
+        if (code && COLORABLE.has(id)) itemColors[id] = code;
+      }
+    }
+    return { items, colors: cfg.colors !== false, scheme, itemColors };
   } catch (_) { return def; }
 }
 
 // The picker's only id source — no copy of the registry exists anywhere else.
+// colorable rides along so the picker knows where its accent submode applies.
 if (process.argv.includes('--segments')) {
-  process.stdout.write(JSON.stringify(SEGMENTS.map((s) => ({ id: s[0], label: s[1] }))));
+  process.stdout.write(JSON.stringify(
+    SEGMENTS.map((s) => ({ id: s[0], label: s[1], colorable: s[2] }))));
+  process.exit(0);
+}
+
+// The picker's only scheme-name source, same single-carrier rule as above.
+// Order here is the picker's cycling order.
+if (process.argv.includes('--schemes')) {
+  process.stdout.write(JSON.stringify(Object.keys(SCHEMES)));
   process.exit(0);
 }
 
@@ -254,33 +400,53 @@ process.stdin.on('end', () => {
     const modelId = (input.model && input.model.id) || '';
     const modelName = (input.model && input.model.display_name) || modelId || '?';
 
+    const cfg = loadConfig();
+    const pal = SCHEMES[cfg.scheme];
+    // Identity accents honor per-item overrides; pressure/freshness never do.
+    const accent = (id, slot) => cfg.itemColors[id] || slot;
+
     // Builders by id; null means the segment stays off the line (no placeholders).
     const builders = {
       // Fused repo(branch), unspaced: the repo carries the Path accent and "(branch)" the
       // Branch accent — the two accents codex gives the dir and branch items it keeps
-      // separate.
+      // separate. An override unifies both halves: the fused segment is ONE item.
       'git-branch': () => {
         const git = gitInfo(cwd);
+        const ov = cfg.itemColors['git-branch'];
         return git
-          ? C.green + git.repo + C.reset + C.magenta + '(' + git.branch + ')' + C.reset
-          : C.green + path.basename(cwd) + C.reset;
+          ? paint(ov || pal.path, git.repo) + paint(ov || pal.branch, '(' + git.branch + ')')
+          : paint(ov || pal.path, path.basename(cwd));
+      },
+      // The granular trio behind the fused segment, each independently
+      // toggleable: directory always renders, branch and github only where a
+      // repo / github origin actually exists.
+      'directory': () => paint(accent('directory', pal.path), path.basename(cwd)),
+      'branch': () => {
+        const git = gitInfo(cwd);
+        return git ? paint(accent('branch', pal.branch), git.branch) : null;
+      },
+      'github': () => {
+        const remote = gitRemote(cwd);
+        return remote ? paint(accent('github', pal.github), remote) : null;
       },
       // effort appears in the payload only for models that support it, so absence is the
       // normal state, not an error. The display name is compressed: "Fable 5" -> "Fable5".
-      // The name wears the clay accent; fast stays dim; the effort level keeps its
-      // escalative colour.
+      // The name wears the model accent; fast wears the fast slot; the effort level keeps
+      // its escalative colour.
       'model': () => {
-        let model = C.clay + modelName.replace(/\s+/g, '') + C.reset;
+        let model = paint(accent('model', pal.model), modelName.replace(/\s+/g, ''));
         const level = input.effort && input.effort.level;
         if ((typeof level === 'string' && level) || Number.isFinite(level)) {
-          model += ' ' + effortColor(level) + level + C.reset;
+          model += ' ' + paint(effortColor(level, pal), String(level));
         }
-        if (input.fast_mode === true) model += ' ' + C.dim + 'fast' + C.reset;
+        if (input.fast_mode === true) model += ' ' + paint(pal.fast, 'fast');
         return model;
       },
-      'context': () => contextSeg(input.context_window),
-      'five-hour-limit': () => limitSeg('5h', input.rate_limits && input.rate_limits.five_hour),
-      'weekly-limit': () => limitSeg('7d', input.rate_limits && input.rate_limits.seven_day),
+      'context': () => contextSeg(input.context_window, pal),
+      'five-hour-limit': () => limitSeg('5h', input.rate_limits && input.rate_limits.five_hour,
+        pal, accent('five-hour-limit', pal.label)),
+      'weekly-limit': () => limitSeg('7d', input.rate_limits && input.rate_limits.seven_day,
+        pal, accent('weekly-limit', pal.label)),
       // Session id: the bare FULL UUID — the exact string `claude --resume <id>` takes and
       // the stem of the transcript filename (<session_id>.jsonl), copyable straight off the
       // line. The /rename session_name is deliberately NOT rendered. White is normal
@@ -289,24 +455,23 @@ process.stdin.on('end', () => {
         const sid = typeof input.session_id === 'string' && input.session_id
           ? input.session_id
           : null;
-        return sid ? C.white + sid + C.reset : null;
+        return sid ? paint(accent('session', pal.session), sid) : null;
       },
       'cost': () => {
         const cost = input.cost && input.cost.total_cost_usd;
         return typeof cost === 'number' && cost > 0
-          ? C.green + '$' + cost.toFixed(2) + C.reset
+          ? paint(accent('cost', pal.cost), '$' + cost.toFixed(2))
           : null;
       },
-      'version': () => versionSeg(input.version),
+      'version': () => versionSeg(input.version, pal),
     };
 
-    const cfg = loadConfig();
     const parts = [];
     for (const id of cfg.items) {
       const seg = builders[id]();
       if (seg) parts.push(seg);
     }
-    out = parts.join(C.dim + '|' + C.reset);
+    out = parts.join(paint(pal.sep, '|'));
     if (!cfg.colors) out = out.replace(/\x1b\[[0-9;]*m/g, '');
   } catch (e) {
     // Never leave the bar blank: a named error is debuggable, an empty line is not.

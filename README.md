@@ -1,8 +1,9 @@
 # ClaudeCodeStatusline
 
 An interactive status line picker for [Claude Code](https://github.com/anthropics/claude-code) —
-customize what your status line shows: toggle components on and off, reorder them, and see a
-live preview of the assembled bar before you save.
+customize what your status line shows: toggle components on and off, reorder them, pick a
+colour scheme and per-component accent colours, and see a live preview of the assembled bar
+before you save.
 
 This is a working prototype built to demonstrate that a built-in `/statusline` picker is
 mostly assembly-and-UI over data Claude Code already computes on every render. It runs
@@ -51,7 +52,7 @@ reads, VT output). The Windows reader speaks the same key-token language as the 
 and the mapping is pinned by the built-in checks on every platform — though it has not yet
 been driven on a physical Windows console, so run `--selftest` there first. A console that
 cannot do ANSI, or a platform with neither API, gets a clean exit `2` saying so rather than
-a traceback. `--show`, `--selftest`, `--apply` and `--colors` run anywhere, which is what
+a traceback. `--show`, `--selftest`, `--apply`, `--colors` and `--scheme` run anywhere, which is what
 makes the `/statusline` command's default AskUserQuestion path platform-independent:
 nothing in it touches a tty. Only
 the command's tmux-pane path additionally wants `tmux`, and its watchdog wants GNU `timeout`,
@@ -86,7 +87,8 @@ python3 statusline_picker.py
 | `↑` `↓` | move the cursor |
 | `space` | toggle the component on/off |
 | `←` `→` | reorder |
-| `c` | toggle colours |
+| `c` | cycle colour schemes (`codex` → `claude-code` → `mono` → off) |
+| `a` | cycle the selected component's accent colour |
 | `v` | hand off to Claude Code's built-in statusline setup |
 | `Enter` | save |
 | `q` / `Esc` / `Ctrl-C` | cancel without saving |
@@ -100,11 +102,12 @@ python3 statusline_picker.py --show --payload FILE   # preview against a capture
 python3 statusline_picker.py --apply "model,context" --colors on
                                          # save a selection without the TUI
 python3 statusline_picker.py --colors off     # keep items, change colors only
+python3 statusline_picker.py --scheme claude-code   # switch colour scheme only
 ```
 
 `--apply` takes comma-separated component ids in render order (`""` saves an empty bar) and
-is strict where the config-file parse is forgiving: an unknown or duplicate id exits `2`
-naming it, and nothing is written. The file parse must repair silently — a config on disk
+is strict where the config-file parse is forgiving: an unknown or duplicate id — or an
+unknown `--scheme` name — exits `2` naming it, and nothing is written. The file parse must repair silently — a config on disk
 has no one to ask — but an explicit instruction repaired silently would save a bar you did
 not ask for. Saves go through the same atomic tempfile-plus-rename path the TUI uses.
 
@@ -168,6 +171,9 @@ running `node statusline.js --segments`. There is no second copy to drift.
 | id | shows |
 | --- | --- |
 | `git-branch` | repo + branch, or the directory when not in a repo |
+| `directory` | directory name alone |
+| `branch` | git branch alone (repos only) |
+| `github` | GitHub `org/repo`, read spawn-free from `.git/config`'s origin remote |
 | `model` | model name, effort level, fast-mode flag |
 | `context` | context tokens used / window size |
 | `five-hour-limit` | 5-hour rate limit percentage |
@@ -176,17 +182,37 @@ running `node statusline.js --segments`. There is no second copy to drift.
 | `cost` | session cost in USD |
 | `version` | running version, and a restart hint if the install has moved on |
 
+`directory`, `branch` and `github` are the fused `git-branch` component split into standalone
+pieces for people who want them separated or differently coloured; they are off by default, so
+a bar with no config file renders exactly as it always has.
+
 A component that has no data is omitted rather than rendered empty. Colour is one three-step
 pressure scale — green under 50%, yellow under 75%, red at or above — applied to context,
 rate limits and effort alike, so a colour always means the same amount of pressure wherever
 it appears.
+
+That scale lives inside one of three colour schemes: `codex` (the default — normal-intensity
+ANSI, so your terminal theme decides the hues), `claude-code` (the Claude Code TUI's own dark
+theme, measured out of the installed binary — all truecolor, because the point is the CLI's
+exact hues), and `mono` (every colour slot empty; the bar emits zero escape bytes). On top of
+a scheme, identity accents — directory, branch, model name and the like — can be overridden
+per component with a named ANSI colour or `#RRGGBB` hex. The pressure and freshness colours
+are deliberately not overridable: `node statusline.js --segments` marks each component
+`colorable` or not, and the picker's accent key refuses to cycle on the rest, so a colour
+still always means the same amount of pressure. Scheme names have a single carrier too — the picker
+discovers them with `node statusline.js --schemes`.
 
 ## Configuration contract
 
 `~/.claude/statusline-config.json`, or wherever `STATUSLINE_CONFIG` points:
 
 ```json
-{ "items": ["git-branch", "model", "context"], "colors": true }
+{
+  "items": ["directory", "branch", "github", "model", "context"],
+  "colors": true,
+  "scheme": "claude-code",
+  "item_colors": { "branch": "#87afff", "directory": "cyan" }
+}
 ```
 
 The semantics are modelled on Codex's `status_line_setup.rs`, and they are the whole contract:
@@ -196,6 +222,12 @@ The semantics are modelled on Codex's `status_line_setup.rs`, and they are the w
 3. A duplicate id is dropped.
 4. A missing or unparseable file falls back to all components in default order.
 5. An empty `items` array is a valid explicit choice — an empty bar, not an error.
+6. `scheme` names the palette; an unknown or missing name falls back to `codex`, so an old
+   config keeps rendering the bar it always rendered.
+7. `item_colors` maps component id → named ANSI colour or `#RRGGBB`. Entries that name an
+   unknown id, a non-colorable component, or an unparseable spec are dropped **per entry** —
+   one typo never takes the rest of the overrides down, and never leaks half an escape
+   sequence into the bar.
 
 Because the picker previews by invoking the real renderer with `STATUSLINE_CONFIG` pointed at
 a candidate file, the preview cannot drift from what saving actually produces.
@@ -240,7 +272,7 @@ asking every user to rediscover them in their own render script:
 ## The pty regression lab
 
 `lab/picker_lab.py` drives the real picker binary through a pty pair, under sandboxed `HOME`
-directories, across 28 cases: launch-window keystrokes, ESC/CSI/SS3 parsing, hung and garbage
+directories, across 29 cases: launch-window keystrokes, ESC/CSI/SS3 parsing, hung and garbage
 renderers, concurrent saves, narrow terminals, and teardown.
 
 ```bash

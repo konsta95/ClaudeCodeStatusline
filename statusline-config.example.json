@@ -9,5 +9,9 @@
     "cost",
     "version"
   ],
-  "colors": true
+  "colors": true,
+  "scheme": "codex",
+  "item_colors": {
+    "git-branch": "#87afff"
+  }
 }
