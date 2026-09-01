@@ -611,6 +611,72 @@ def read_keys_tty(stdin):
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def read_keys_windows(getwch):
+    """Key reader for the native Windows console, yielding the same tokens as
+    read_keys_tty so run_picker cannot tell the platforms apart. No raw-mode
+    dance: console reads are already unbuffered and unechoed. Special keys
+    arrive as a two-read pair -- a '\\x00' or '\\xe0' prefix, then a scan code
+    -- and the pair is consumed whole so an unknown special key can never fall
+    through into the character bindings (the CSI parser's no-fallthrough rule,
+    ported). Ctrl-C is normalized to cancel: under the default console mode it
+    surfaces as KeyboardInterrupt out of getwch, and letting that escape would
+    exit 1 -- the "defect, do not retry" code -- for a keypress this tool
+    documents as cancel. getwch is injected (the caller passes msvcrt.getwch)
+    so these semantics stay checkable off-Windows through a scripted console;
+    a getwch that raises EOFError ends the stream -- the scripted console
+    does, the real one never."""
+    specials = {"H": "up", "P": "down", "K": "left", "M": "right"}
+    while True:
+        try:
+            ch = getwch()
+        except EOFError:
+            return
+        except KeyboardInterrupt:
+            ch = "\x03"
+        if ch in ("\x00", "\xe0"):
+            try:
+                scan = getwch()
+            except (EOFError, KeyboardInterrupt):
+                return
+            yield specials.get(scan, "other")
+        elif ch in ("\r", "\n"):
+            yield "enter"
+        elif ch == " ":
+            yield "space"
+        elif ch in ("c", "C"):
+            yield "colors"
+        elif ch in ("v", "V"):
+            yield "customize"
+        elif ch in ("q", "Q", "\x1b", "\x03"):
+            yield "quit"
+
+
+def enable_vt_output():
+    """Best-effort switch of the Windows console to ANSI (VT) processing,
+    which draw() and the renderer's colored output require. True when VT
+    sequences will be honoured, False when this console cannot render the TUI
+    (a pre-VT conhost). Never raises: anywhere without the Win32 console API
+    -- every POSIX platform -- the honest answer is simply False, and no
+    caller there needs it. 0x0004 is ENABLE_VIRTUAL_TERMINAL_PROCESSING and
+    -11 is STD_OUTPUT_HANDLE, named here because ctypes carries no symbolic
+    constants for them."""
+    try:
+        import ctypes
+        windll = getattr(ctypes, "windll", None)  # exists only on Windows
+        if windll is None:
+            return False
+        kernel32 = windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        if mode.value & 0x0004:
+            return True
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
     """One-shot dump: registry, config, preview. Raises RuntimeError /
     OSError / ValueError upward; main prints them as clean exit-2 errors."""
@@ -1019,6 +1085,59 @@ def selftest():
     else:
         print("SKIP: pty reader checks (no os.openpty)")
 
+    # windows console driver: same token language as the tty reader, pinned
+    # through a scripted console so the mapping is checked on EVERY platform
+    # -- including the POSIX boxes where msvcrt itself cannot exist. "KBI"
+    # scripts a Ctrl-C: the real console surfaces it as KeyboardInterrupt out
+    # of getwch, and the reader must fold it into cancel rather than let it
+    # escape as exit 1.
+    def scripted_console(script):
+        it = iter(script)
+
+        def getwch():
+            item = next(it, None)
+            if item is None:
+                raise EOFError
+            if item == "KBI":
+                raise KeyboardInterrupt
+            return item
+
+        return getwch
+
+    win_script = ["\xe0", "H", "\x00", "P", "\xe0", "K", "\xe0", "M",
+                  "\xe0", "G", " ", "\r", "c", "C", "v", "x", "q",
+                  "\x1b", "KBI", "\x03"]
+    check("windows reader: full token mapping",
+          list(read_keys_windows(scripted_console(win_script)))
+          == ["up", "down", "left", "right", "other", "space", "enter",
+              "colors", "colors", "customize", "quit", "quit", "quit",
+              "quit"])
+    check("windows reader: stream ends cleanly at console EOF",
+          list(read_keys_windows(scripted_console([]))) == [])
+    check("windows reader: EOF inside a special-key pair ends, no fallthrough",
+          list(read_keys_windows(scripted_console(["\xe0"]))) == [])
+
+    # the driver end-to-end: a scripted console drives the real state machine
+    # to a save -- toggle a off, cursor down to c, toggle c on, save
+    def _stub_previewer(_st):
+        return "bar", "label"
+
+    def _sink(_s):
+        return None
+
+    st_win = PickerState(registry, ["a", "b"], True)
+    outcome_win = run_picker(
+        st_win,
+        read_keys_windows(scripted_console([" ", "\xe0", "P", " ", "\r"])),
+        _stub_previewer, _sink)
+    check("windows reader drives run_picker to a save",
+          outcome_win == "saved" and st_win.enabled == ["b", "c"])
+
+    vt = enable_vt_output()
+    check("enable_vt_output returns a bool, never raises", vt in (True, False))
+    if not sys.platform.startswith("win"):
+        check("enable_vt_output is False off-Windows", vt is False)
+
     print("---")
     print("SELFTEST %s (%d failures)" % ("PASSED" if not failures else "FAILED", len(failures)))
     return 0 if not failures else 1
@@ -1109,15 +1228,34 @@ def main():
     # Probed here rather than left to the lazy import in read_keys_tty: an
     # ImportError there escapes main() and Python exits 1, which this tool
     # documents as "selftest failures -- a real defect, do not retry". A
-    # platform without termios is neither a defect nor un-retryable, so it
-    # has to reach the environment code instead.
+    # platform without a usable console API is neither a defect nor
+    # un-retryable, so it has to reach the environment code instead.
     try:
         import termios  # noqa: F401
     except ImportError:
-        print("error: the interactive picker needs a POSIX terminal (termios); "
-              "this platform has none. --show and --selftest work anywhere; "
-              "on Windows, run it under WSL.", file=sys.stderr)
-        sys.exit(2)
+        # Native Windows lands here: no termios, but the console API does the
+        # same job through its own reader. Only a platform with NEITHER
+        # module is out of options -- still environmental, never a defect.
+        try:
+            import msvcrt
+        except ImportError:
+            print("error: the interactive picker needs a POSIX terminal "
+                  "(termios) or a Windows console (msvcrt); this platform "
+                  "has neither. --show, --apply and --selftest work "
+                  "anywhere.", file=sys.stderr)
+            sys.exit(2)
+        if not enable_vt_output():
+            print("error: this console does not support ANSI (VT) output, "
+                  "which the picker's screen needs; Windows 10+ conhost or "
+                  "Windows Terminal required. --show and --apply work "
+                  "anywhere.", file=sys.stderr)
+            sys.exit(2)
+
+        def make_keys():
+            return read_keys_windows(msvcrt.getwch)
+    else:
+        def make_keys():
+            return read_keys_tty(sys.stdin)
 
     try:
         registry = fetch_registry(node, args.js)
@@ -1151,7 +1289,7 @@ def main():
     # clips at the right edge instead of wrapping the layout into a mangle
     write_flush("\x1b[?7l")
     try:
-        outcome = run_picker(state, read_keys_tty(sys.stdin), previewer, write_flush)
+        outcome = run_picker(state, make_keys(), previewer, write_flush)
     finally:
         write_flush("\x1b[?7h")
         if sandbox:

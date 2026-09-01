@@ -44,11 +44,15 @@ compromise.
 
 Requires Node.js and Python 3. No dependencies, no build step, no network access.
 
-**Platforms.** Linux and macOS for the interactive TUI — it needs a POSIX terminal, putting
-the tty in raw mode through `termios` — so on Windows use WSL for that; a native Windows
-launch exits `2` with that explanation rather than a traceback. `--show`, `--selftest`,
-`--apply` and `--colors` run anywhere, which is what makes the `/statusline` command's
-default AskUserQuestion path fully native-Windows-capable: nothing in it touches a tty. Only
+**Platforms.** The interactive TUI runs on Linux and macOS through a POSIX terminal
+(`termios` raw mode) and natively on Windows 10+ through the console API (`msvcrt` key
+reads, VT output). The Windows reader speaks the same key-token language as the tty reader
+and the mapping is pinned by the built-in checks on every platform — though it has not yet
+been driven on a physical Windows console, so run `--selftest` there first. A console that
+cannot do ANSI, or a platform with neither API, gets a clean exit `2` saying so rather than
+a traceback. `--show`, `--selftest`, `--apply` and `--colors` run anywhere, which is what
+makes the `/statusline` command's default AskUserQuestion path platform-independent:
+nothing in it touches a tty. Only
 the command's tmux-pane path additionally wants `tmux`, and its watchdog wants GNU `timeout`,
 which base macOS does not ship: install coreutils (Homebrew names it `gtimeout`) and the
 command finds either. Without one it still runs, but the wait for the pane is then unbounded.
