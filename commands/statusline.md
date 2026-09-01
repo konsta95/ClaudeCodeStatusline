@@ -293,7 +293,7 @@ the turn is not empty, then print the line for them to run in their own terminal
 python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py" --show
 ```
 
-```
+```bash
 python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py"
 ```
 

@@ -8,7 +8,7 @@ This is a working prototype built to demonstrate that a built-in `/statusline` p
 mostly assembly-and-UI over data Claude Code already computes on every render. It runs
 against Claude Code **2.1.247** (measured 2026-08-27).
 
-```
+```text
 ClaudeCodeStatusline(main)|Opus5 xhigh|83K/1M|5h 25%|7d 5%|3ec15a89-…|$1.23|v2.1.247
 ```
 
