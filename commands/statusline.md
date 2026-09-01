@@ -61,8 +61,12 @@ goes through the picker's validated non-interactive path.
    ```
 
    `--apply` is strict where the config-file parse is forgiving: unknown or duplicate ids
-   exit 2 naming them, and nothing is written. On exit 2, re-fetch the registry and fix
-   the list — do not retry blind, and do not write the JSON by hand to get around it.
+   exit 2 naming them, and nothing is written. Exit 2 is not one condition, so read the
+   stderr line before acting: `unknown segment id` / `duplicate segment id` — re-fetch the
+   registry and fix the list; `could not save` — report the save error (a read-only or full
+   disk is not a selection problem); anything else is a renderer or environment failure —
+   report it verbatim. Never retry blind, and never write the JSON by hand to get around a
+   refusal.
 
 5. **Confirm.** Run `--show` again and report the new bar. The renderer re-reads the
    config on every refresh, so the change lands on the next repaint with no restart.

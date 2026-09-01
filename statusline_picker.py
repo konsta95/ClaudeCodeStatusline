@@ -132,6 +132,11 @@ def fetch_registry(node, js):
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError("%s --segments timed out after %ds" % (js, PREVIEW_TIMEOUT))
+    except OSError as exc:
+        # node can vanish or lose execute permission between shutil.which and
+        # here; that is environmental, so it must surface as this function's
+        # RuntimeError contract, not escape as a traceback
+        raise RuntimeError("could not launch %s: %s" % (node, exc))
     if out.returncode != 0:
         raise RuntimeError(
             "%s --segments exited %d: %s"
@@ -263,6 +268,8 @@ def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None):
             )
         except subprocess.TimeoutExpired:
             return "[preview timed out after %ds]" % PREVIEW_TIMEOUT
+        except OSError as exc:
+            return "[preview failed: could not launch %s: %s]" % (node, exc)
         if out.returncode != 0:
             return "[preview failed: exit %d]" % out.returncode
         return out.stdout.decode("utf-8", "replace")
@@ -670,6 +677,27 @@ def selftest():
     except ValueError as exc:
         check("apply parse refuses duplicate ids, naming them",
               str(exc).endswith(": a"))
+
+    # fetch_registry's contract is "every failure mode raises RuntimeError";
+    # an OSError escaping raw would exit 1 -- the "defect, do not retry" code --
+    # for a node that vanished between shutil.which and exec, which is
+    # environmental and exactly retryable
+    try:
+        fetch_registry("/nonexistent/statusline-node", "statusline.js")
+        check("fetch_registry: unlaunchable node is a RuntimeError", False)
+    except RuntimeError:
+        check("fetch_registry: unlaunchable node is a RuntimeError", True)
+    except OSError:
+        check("fetch_registry: unlaunchable node is a RuntimeError", False)
+    # render_preview's contract is "never raises": same launch failure must
+    # degrade to a bracketed notice like every other renderer failure
+    try:
+        got_bad_node = render_preview("/nonexistent/statusline-node", "x.js",
+                                      ["a"], False, b"{}")
+        check("preview degrades when node cannot launch",
+              got_bad_node.startswith("[preview failed:"))
+    except OSError:
+        check("preview degrades when node cannot launch", False)
 
     with tempfile.TemporaryDirectory() as td:
         cfg = os.path.join(td, "cfg.json")

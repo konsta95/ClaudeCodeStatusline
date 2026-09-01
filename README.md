@@ -91,7 +91,7 @@ Non-interactive uses:
 ```bash
 python3 statusline_picker.py --show      # render a preview and exit; no TTY needed
 python3 statusline_picker.py --selftest  # the built-in checks, pty coverage included
-python3 statusline_picker.py --payload FILE   # preview against a captured payload
+python3 statusline_picker.py --show --payload FILE   # preview against a captured payload
 python3 statusline_picker.py --apply "model,context" --colors on
                                          # save a selection without the TUI
 python3 statusline_picker.py --colors off     # keep items, change colors only
