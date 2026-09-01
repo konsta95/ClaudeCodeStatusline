@@ -1310,12 +1310,16 @@ def main():
         sys.stdout.flush()
 
     # autowrap off while frames are on screen: a frame wider than the pane
-    # clips at the right edge instead of wrapping the layout into a mangle
-    write_flush("\x1b[?7l")
+    # clips at the right edge instead of wrapping the layout into a mangle.
+    # cursor hidden for the same tenancy: draw() parks it under the "colors:"
+    # line after every frame, where it sits blinking as if the picker were a
+    # prompt. Both are restored in the same finally, so no exit path -- save,
+    # cancel, handoff, or a raise -- leaves the pane's shell without them.
+    write_flush("\x1b[?7l\x1b[?25l")
     try:
         outcome = run_picker(state, make_keys(), previewer, write_flush)
     finally:
-        write_flush("\x1b[?7h")
+        write_flush("\x1b[?7h\x1b[?25h")
         if sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
     sys.stdout.write("\x1b[2J\x1b[H")

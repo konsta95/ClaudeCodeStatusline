@@ -95,7 +95,7 @@ CHAN="statusline-picker-$$"
 SENT="/tmp/statusline-picker-$$.rc"; ERR="/tmp/statusline-picker-$$.err"
 rm -f "$SENT" "$SENT.part" "$ERR"
 TMO=$(command -v timeout || command -v gtimeout || true)   # macOS has neither by default
-PANE=$(tmux split-window -v -b -l 16 -P -F '#{pane_id}' \
+PANE=$(tmux split-window -v -l 16 -P -F '#{pane_id}' \
   "if : 2>>\"$ERR\" && exec 9>>\"$ERR\"; then python3 \"$PICKER\" 2>&9; RC=\$?; else RC=setup; fi
    echo \$RC > \"$SENT.part\" && mv \"$SENT.part\" \"$SENT\"; tmux wait-for -S $CHAN") \
   && if [ -n "$TMO" ]; then "$TMO" 900 tmux wait-for "$CHAN"
@@ -114,9 +114,10 @@ echo "picker-exit=$RC"
 [ "$RC" = still-open ] || rm -f "$SENT" "$SENT.part" "$ERR"
 ```
 
-`-v -b` stacks the pane ABOVE the session and `-l 16` gives it the ~14 lines it needs; a
-side-by-side `-h` split is too narrow and the preview line clips mid-word. Focus moves to the
-pane, which is the point — the human types there.
+`-v` opens the pane BELOW the session — at the terminal's bottom, beside where the status
+line itself lives — and `-l 16` gives it the ~14 lines it needs; a side-by-side `-h` split
+is too narrow and the preview line clips mid-word. Focus moves to the pane, which is the
+point — the human types there.
 
 Keys once it opens: `↑`/`↓` move, `space` toggles, `←`/`→` reorder within the enabled block,
 `c` colours, **`v` built-in setup**, `Enter` saves, `q`/`Esc` cancels.
@@ -239,7 +240,7 @@ promoted.
 | `3` | the human pressed `v` | hand off — see below |
 | `2` | environment or usage error | report the captured `picker-stderr:` block verbatim; do not paper over it |
 | `1` | selftest failures | a real defect in the picker; report it, do not retry |
-| `still-open` | the bounded wait expired and the pane is still alive | not a result, so do not report one. The pane's existence is all that is known — usually the human is still editing, but a save that has finished while the sentinel is still being published is indistinguishable from here. Say the pane above them is still open and that no outcome has arrived; do not say the picker is still open, and do not say whether anything was written. Nothing was cleaned up and it finishes on its own; use `--show` if the live state matters |
+| `still-open` | the bounded wait expired and the pane is still alive | not a result, so do not report one. The pane's existence is all that is known — usually the human is still editing, but a save that has finished while the sentinel is still being published is indistinguishable from here. Say the pane below their session is still open and that no outcome has arrived; do not say the picker is still open, and do not say whether anything was written. Nothing was cleaned up and it finishes on its own; use `--show` if the live state matters |
 | `missing` | no sentinel file and no pane — it died before it could report, or died mid-write and its fragment was never promoted off `.part` | outcome UNKNOWN — say that, and read the live state with `--show` rather than assuming either way |
 | `unclassified:[…]` | sentinel exists and is complete, but holds something else | also UNKNOWN. Two values are known: `setup` means the pane could not open `$ERR` and the picker never started; `127` means the pane shell had no `python3`. Anything else is genuinely unattributed — the picker may never have run, or may have been killed part-way, which is where a shell's signal statuses like `130` (SIGINT) or `143` (SIGTERM) come from. Do not say which. Report the raw value and read the live state with `--show` |
 

@@ -652,6 +652,25 @@ def main():
              % (b"cancelled" in got, status, restored, b"KeyboardInterrupt" in p.buf))
     p.kill_close()
 
+    # ---- P10: the terminal cursor — hidden before frames (\x1b[?25l) and
+    # restored on exit (\x1b[?25h), so the hardware cursor does not sit
+    # blinking under the "colors:" line while the picker owns the screen, and
+    # the pane's shell gets its cursor back afterwards. (Pre-fix: no cursor
+    # switch in either direction — observed hidden=False restored=False.)
+    home = make_home("p10")
+    p = PtyPicker(home)
+    p.read_until(b"colors: on", 15)
+    hide_on = b"\x1b[?25l" in p.buf
+    p.send(b"q")
+    p.read_until(b"cancelled", 10)
+    p.wait(5)
+    p.drain()
+    show_back = b"\x1b[?25h" in p.buf
+    evidence("P10-cursor", "ok" if hide_on and show_back else "FINDING",
+             "cursor-hidden-before-frames=%s restored-on-exit=%s"
+             % (hide_on, show_back))
+    p.kill_close()
+
     # ---- F-cases: every comparator that can report "ok" above is observed
     # firing against a doctored known-bad first (house rule). Expected verdict
     # for each F-case is FLIPPED — the detector fires.
