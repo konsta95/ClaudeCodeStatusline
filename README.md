@@ -36,7 +36,8 @@ exactly where a permission prompt surfaces — offering candidate bars rendered 
 real renderer, and saving through the picker's validated `--apply` path; that works on any
 platform Claude Code runs on, native Windows included, but a popup holds at most four static
 options, so it picks among candidate sets rather than toggling components freely. For
-free-form reordering the command opens the picker in a tmux pane stacked above your session —
+free-form reordering the command opens the picker in a tmux pane below your session, at the
+terminal's bottom —
 full interactivity, but a workaround with a dependency. A built-in picker would need neither
 compromise.
 
@@ -122,7 +123,7 @@ opened it — so the exit code is the only channel out, and a shared `0` would l
 selections, renders each through the real renderer, and offers them as **AskUserQuestion
 popups** over the input box — saving the choice via `--apply`, so it works wherever Claude
 Code runs, tmux or not. On request ("pane", "full picker", free-form reordering) it opens
-the interactive picker in a tmux pane above your session. Copy it to
+the interactive picker in a tmux pane below your session. Copy it to
 `~/.claude/commands/statusline.md`. It assumes the clone lives at
 `~/ClaudeCodeStatusline`; if yours does not, change the path in every block of that
 file, since each runs in its own shell and none inherits from another. A user command shadows
