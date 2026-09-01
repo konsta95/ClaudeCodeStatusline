@@ -131,12 +131,14 @@ def fetch_registry(node, js):
             [node, js, "--segments"], capture_output=True, timeout=PREVIEW_TIMEOUT
         )
     except subprocess.TimeoutExpired:
-        raise RuntimeError("%s --segments timed out after %ds" % (js, PREVIEW_TIMEOUT))
+        raise RuntimeError(
+            "%s --segments timed out after %ds" % (js, PREVIEW_TIMEOUT)
+        ) from None
     except OSError as exc:
         # node can vanish or lose execute permission between shutil.which and
         # here; that is environmental, so it must surface as this function's
         # RuntimeError contract, not escape as a traceback
-        raise RuntimeError("could not launch %s: %s" % (node, exc))
+        raise RuntimeError("could not launch %s: %s" % (node, exc)) from exc
     if out.returncode != 0:
         raise RuntimeError(
             "%s --segments exited %d: %s"
@@ -149,7 +151,7 @@ def fetch_registry(node, js):
         raise RuntimeError(
             "%s --segments printed something other than the registry: %r"
             % (js, out.stdout[:120])
-        )
+        ) from None
     if not registry:
         raise RuntimeError("empty segment registry from %s" % js)
     return registry
@@ -393,7 +395,9 @@ def pick_payload(probe_path, explicit=False):
             raise
     except ValueError as exc:
         if explicit:
-            raise ValueError("payload %s is not JSON: %s" % (probe_path, exc))
+            raise ValueError(
+                "payload %s is not JSON: %s" % (probe_path, exc)
+            ) from exc
     sandbox = tempfile.mkdtemp(prefix="statusline-preview-")
     return json.dumps(FIXTURE_PAYLOAD).encode("utf-8"), sandbox, None, None
 

@@ -1,4 +1,4 @@
-# claude-code-statusline-picker
+# ClaudeCodeStatusline
 
 An interactive status line picker for [Claude Code](https://github.com/anthropics/claude-code) —
 customize what your status line shows: toggle components on and off, reorder them, and see a
@@ -9,7 +9,7 @@ mostly assembly-and-UI over data Claude Code already computes on every render. I
 against Claude Code **2.1.247** (measured 2026-08-27).
 
 ```
-claude-code-statusline-picker(main)|Opus5 xhigh|83K/1M|5h 25%|7d 5%|3ec15a89-…|$1.23|v2.1.247
+ClaudeCodeStatusline(main)|Opus5 xhigh|83K/1M|5h 25%|7d 5%|3ec15a89-…|$1.23|v2.1.247
 ```
 
 ## Why this exists
@@ -54,8 +54,8 @@ which base macOS does not ship: install coreutils (Homebrew names it `gtimeout`)
 command finds either. Without one it still runs, but the wait for the pane is then unbounded.
 
 ```bash
-git clone https://github.com/konsta95/claude-code-statusline-picker
-cd claude-code-statusline-picker
+git clone https://github.com/konsta95/ClaudeCodeStatusline
+cd ClaudeCodeStatusline
 ```
 
 Point Claude Code at the renderer in `~/.claude/settings.json`:
@@ -120,7 +120,7 @@ popups** over the input box — saving the choice via `--apply`, so it works whe
 Code runs, tmux or not. On request ("pane", "full picker", free-form reordering) it opens
 the interactive picker in a tmux pane above your session. Copy it to
 `~/.claude/commands/statusline.md`. It assumes the clone lives at
-`~/claude-code-statusline-picker`; if yours does not, change the path in every block of that
+`~/ClaudeCodeStatusline`; if yours does not, change the path in every block of that
 file, since each runs in its own shell and none inherits from another. A user command shadows
 the built-in of the same name, so `/statusline` reaches it.
 
