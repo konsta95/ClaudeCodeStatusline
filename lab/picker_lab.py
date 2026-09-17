@@ -769,7 +769,8 @@ def main():
     # would pass the termios half for free. (Pre-fix: termios left raw, no
     # restore bytes after the signal.)
     for case, signum in (("P11-sigterm", signal.SIGTERM),
-                         ("P12-sighup", signal.SIGHUP)):
+                         ("P12-sighup", signal.SIGHUP),
+                         ("P14-sigquit", signal.SIGQUIT)):
         home = make_home(case.split("-")[0].lower())
         p = PtyPicker(home)
         p.read_until(b"statusline picker", 15)

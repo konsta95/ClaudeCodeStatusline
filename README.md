@@ -216,9 +216,12 @@ pieces for people who want them separated or differently coloured; they are off 
 a bar with no config file renders exactly as it always has. Saving from the picker without
 touching the list keeps them off too.
 
-A component that has no data is omitted rather than rendered empty. A component whose data
-has the wrong shape — payload fields do shift type between versions — is marked `id!` in dim
-and the rest of the bar still renders, so one bad field never costs you the other ten values.
+A component that has no data is omitted rather than rendered empty, and so is one whose field
+arrives in a shape its builder checks for and cannot use — a string where a number belongs, say.
+A field that makes a builder *throw* is a different matter: that component is marked `id!` in
+dim and the rest of the bar still renders, so one bad field never costs you the other ten
+values. Today those are the working directory and the model name, the two fields used
+unchecked.
 Names that come off the filesystem or the payload are stripped of control bytes before they
 reach your terminal, so a directory called `evil<ESC>[2J` cannot run an escape sequence on
 every refresh. Colour is one three-step
@@ -314,8 +317,9 @@ asking every user to rediscover them in their own render script:
   that unwind. `SIGTERM` and `SIGHUP` kill a Python process without unwinding it, so a handler
   puts the pane back itself and then re-delivers the signal, leaving the caller's wait status
   as it was. `Ctrl-C` typed before the reader reaches raw mode arrives as `SIGINT` rather than
-  as a byte, and is folded into the same cancel. Only an uncatchable `SIGKILL` can still strand
-  a pane.
+  as a byte, and is folded into the same cancel; `Ctrl-\` in that window arrives as `SIGQUIT`
+  and gets the same restore. Those four are the signals a terminal or a caller actually sends.
+  Any other can still strand a pane, `SIGKILL` above all, because it cannot be caught.
 
 ## The pty regression lab
 
@@ -331,7 +335,10 @@ python3 lab/picker_lab.py
 ```
 
 A check earns the right to be called evidence only once it has been observed *failing*
-against a known-bad input. Both records are kept:
+against a known-bad input. For the cases that existed on 2026-08-27 both records are kept as
+frozen logs. Cases added since then carry their known-bad differently: as a comparator control
+inside the lab itself, such as `F5` and `F6`, which rebuild the bad input from the live source
+on every run, or as the before-and-after table in the pull request that added them.
 
 | file | what it is |
 | --- | --- |
