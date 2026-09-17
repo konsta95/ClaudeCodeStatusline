@@ -445,6 +445,15 @@ def colors_report(colors, scheme):
     return "off (scheme %s is saved and applies once colors are on)" % scheme
 
 
+def home_env(env, home):
+    # Node's os.homedir() and Python's expanduser read HOME on POSIX and
+    # USERPROFILE on Windows. Setting one of them redirects nothing on the other
+    # system, and there the child reads and writes the real profile.
+    env["HOME"] = home
+    env["USERPROFILE"] = home
+    return env
+
+
 def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None,
                    scheme="codex", item_colors=None):
     """Render a candidate selection through the REAL renderer. A renderer that
@@ -473,7 +482,7 @@ def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None,
             }, fh)
         env["STATUSLINE_CONFIG"] = cfg_path
         if sandbox_home:
-            env["HOME"] = sandbox_home
+            home_env(env, sandbox_home)
             os.makedirs(os.path.join(sandbox_home, ".claude"), exist_ok=True)
         try:
             out = subprocess.run(
@@ -1535,7 +1544,7 @@ def selftest():
                 def _bar(config_path):
                     bar_env = dict(os.environ)
                     bar_env.pop("STATUSLINE_PAYLOAD_DUMP", None)
-                    bar_env["HOME"] = td
+                    home_env(bar_env, td)
                     bar_env["STATUSLINE_CONFIG"] = config_path
                     return subprocess.run(
                         [node, DEFAULT_JS],
@@ -1556,7 +1565,7 @@ def selftest():
                     r_env = dict(os.environ)
                     for name in ("STATUSLINE_PAYLOAD_DUMP", "NO_COLOR"):
                         r_env.pop(name, None)
-                    r_env["HOME"] = td
+                    home_env(r_env, td)
                     cfg_file = os.path.join(td, "render-cfg.json")
                     if config is None:
                         cfg_file = os.path.join(td, "no-such-config.json")
@@ -1647,8 +1656,10 @@ def selftest():
                 # colors:false reach it too
                 unparseable = subprocess.run(
                     [node, DEFAULT_JS], input=b"not json", capture_output=True,
-                    env=dict(os.environ, NO_COLOR="1", HOME=td,
+                    env=home_env(
+                        dict(os.environ, NO_COLOR="1",
                              STATUSLINE_CONFIG=os.path.join(td, "no-such.json")),
+                        td),
                     timeout=PREVIEW_TIMEOUT).stdout
                 check("error line: NO_COLOR strips it like the rest of the bar",
                       unparseable.startswith(b"statusline error:")
@@ -1722,7 +1733,7 @@ def selftest():
                 shutil.copy2(os.path.abspath(__file__), lone)
                 lone_env = dict(os.environ)
                 lone_env.pop("STATUSLINE_JS", None)
-                lone_env["HOME"] = bare_home
+                home_env(lone_env, bare_home)
                 missing = subprocess.run(
                     [sys.executable, lone, "--show"],
                     capture_output=True, text=True, env=lone_env)
