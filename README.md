@@ -187,7 +187,12 @@ pieces for people who want them separated or differently coloured; they are off 
 a bar with no config file renders exactly as it always has. Saving from the picker without
 touching the list keeps them off too.
 
-A component that has no data is omitted rather than rendered empty. Colour is one three-step
+A component that has no data is omitted rather than rendered empty. A component whose data
+has the wrong shape — payload fields do shift type between versions — is marked `id!` in dim
+and the rest of the bar still renders, so one bad field never costs you the other ten values.
+Names that come off the filesystem or the payload are stripped of control bytes before they
+reach your terminal, so a directory called `evil<ESC>[2J` cannot run an escape sequence on
+every refresh. Colour is one three-step
 pressure scale — green under 50%, yellow under 75%, red at or above — applied to context,
 rate limits and effort alike, so a colour always means the same amount of pressure wherever
 it appears.
@@ -201,7 +206,9 @@ per component with a named ANSI colour or `#RRGGBB` hex. The pressure and freshn
 are deliberately not overridable: `node statusline.js --segments` marks each component
 `colorable` or not, and the picker's accent key refuses to cycle on the rest, so a colour
 still always means the same amount of pressure. Scheme names have a single carrier too — the picker
-discovers them with `node statusline.js --schemes`.
+discovers them with `node statusline.js --schemes`. A non-empty `NO_COLOR` in the renderer's
+environment turns colour off whatever the config says, as [no-color.org](https://no-color.org)
+asks.
 
 ## Configuration contract
 
@@ -249,10 +256,13 @@ Fields observed on 2.1.247: `model`, `effort`, `fast_mode`, `thinking`, `session
 `context_window`, `exceeds_200k_tokens`, `rate_limits`, `workspace`, plus the conditional
 `vim`, `agent`, `pr` and `worktree` objects.
 
-To see what your version actually sends, set `STATUSLINE_PAYLOAD_DUMP` — to `1` for the
-default location (`~/.claude/statusline-payload-last.json`, which follows `$HOME` if you
-redirect it), or to an explicit path. **This is off by default and opt-in for a reason** — a
-captured payload contains your session id, working directory, cost and rate-limit state.
+To see what your version actually sends, set `STATUSLINE_PAYLOAD_DUMP` — to `1` (or `true`,
+`yes`, `on`) for the default location (`~/.claude/statusline-payload-last.json`, which follows
+`$HOME` if you redirect it), or to an **absolute** path. **This is off by default and opt-in
+for a reason** — a captured payload contains your session id, working directory, cost and
+rate-limit state. `0`, `false`, `no`, `off` and an empty value leave it off, and so does a
+relative name: that would resolve against whatever directory Claude Code happens to be in and
+scatter session data into project trees.
 
 ## Edge cases
 
