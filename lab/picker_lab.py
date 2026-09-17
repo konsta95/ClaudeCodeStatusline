@@ -7,7 +7,11 @@ os.openpty so the parent keeps the slave fd and can read the terminal's termios
 state before, during, and after the child runs. Every case prints one
 EVIDENCE line; the findings report is compiled from these lines. A case that
 cannot run prints LAB-ERROR and the run exits nonzero — a broken instrument
-must not read as a clean sweep.
+must not read as a clean sweep. A case that reports FINDING exits nonzero too:
+the EVIDENCE lines are for a reader, the exit code is for a caller, and a run
+that exits 0 over a finding is a clean sweep to everything that does not parse
+its output. The frozen pre-fix log predates that rule, which is why it ends
+LAB COMPLETE under its FINDING lines.
 
 Layout under SCRATCH/picker-lab/: one home-<case>/ per case, tmp/ as TMPDIR
 for every child so mkdtemp leaks land where they can be counted.
@@ -65,10 +69,18 @@ REAL_JS = os.environ.get("PICKER_LAB_RENDERER") or os.path.join(_REPO, "statusli
 PY = sys.executable or "python3"
 
 lab_errors = []
+findings = []
+
+# The only two verdicts a healthy run produces: a case that held, and a
+# comparator observed flipping on its known-bad. Everything else has to reach
+# the exit code, because the exit code is what a caller or a CI step reads.
+HEALTHY = ("ok", "FLIPPED")
 
 
 def evidence(case, verdict, detail):
     print("EVIDENCE %-28s %-8s %s" % (case, verdict, detail))
+    if verdict not in HEALTHY:
+        findings.append(case)
 
 
 def lab_error(case, detail):
@@ -857,6 +869,9 @@ def main():
     print("---")
     if lab_errors:
         print("LAB BROKEN: %s" % ", ".join(lab_errors))
+        return 1
+    if findings:
+        print("LAB FAILED (%d findings): %s" % (len(findings), ", ".join(findings)))
         return 1
     print("LAB COMPLETE")
     return 0
