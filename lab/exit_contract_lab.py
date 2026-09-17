@@ -32,6 +32,7 @@ Arms:
 Run: python3 lab/exit_contract_lab.py     (exit 0 = all arms as expected)
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,7 @@ def run_picker(script, cfg, no_termios=False, keys=b"\r", settle=2.5):
             os.close(master)
         except OSError:
             pass
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def cfg_writable(parent):

@@ -285,8 +285,19 @@ command's job.
 Before spawning anything, capture what the built-in flow is about to overwrite:
 
 ```bash
-python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/settings.json'))).get('statusLine',{}).get('command','unset'))"
+python3 -c "
+import json, os
+try:
+    cfg = json.load(open(os.path.expanduser('~/.claude/settings.json')))
+    line = cfg.get('statusLine') if isinstance(cfg, dict) else None
+    print(line.get('command', 'unset') if isinstance(line, dict) else 'unset')
+except (OSError, ValueError):
+    print('unset')
+"
 ```
+
+A missing or unreadable `settings.json` prints `unset`: there is nothing for the built-in flow
+to overwrite, which is an answer and not an error.
 
 Tell the human that value, plainly: the built-in `statusline-setup` agent rewrites
 `settings.json.statusLine`, and pointing it elsewhere retires this repo's `statusline.js` — the

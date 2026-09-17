@@ -10,7 +10,7 @@ mostly assembly-and-UI over data Claude Code already computes on every render. I
 against Claude Code **2.1.247** (measured 2026-08-27).
 
 ```text
-ClaudeCodeStatusline(main)|Opus5 xhigh|83K/1M|5h 25%|7d 5%|3ec15a89-…|$1.23|v2.1.247
+ClaudeCodeStatusline(main)|Opus5 xhigh|83K/1M|5h 25%|7d 5%|01234567-89ab-cdef-0123-456789abcdef|$1.23|v2.1.247
 ```
 
 ## Why this exists
@@ -44,7 +44,10 @@ compromise.
 
 ## Install
 
-Requires Node.js and Python 3. No dependencies, no build step, no network access.
+Requires Node.js 12.5 or newer and Python 3.7 or newer — the floors set by the language
+features the two files use. The built-in checks have been run on Python 3.11 through 3.14 and
+on Node 22; older versions inside those floors are expected to work and have not been
+exercised. No dependencies, no build step, no network access.
 
 **Platforms.** The interactive TUI runs on Linux and macOS through a POSIX terminal
 (`termios` raw mode) and natively on Windows 10+ through the console API (`msvcrt` key
@@ -60,11 +63,18 @@ which base macOS does not ship: install coreutils (Homebrew names it `gtimeout`)
 command finds either. Without one it still runs, but the wait for the pane is then unbounded.
 
 ```bash
-git clone https://github.com/konsta95/ClaudeCodeStatusline
-cd ClaudeCodeStatusline
+git clone https://github.com/konsta95/ClaudeCodeStatusline ~/ClaudeCodeStatusline
+cd ~/ClaudeCodeStatusline
 ```
 
-Point Claude Code at the renderer in `~/.claude/settings.json`:
+The renderer and the picker work from any location. The `/statusline` command further down
+assumes this one, so cloning elsewhere means editing the path in that file.
+
+Point Claude Code at the renderer by adding a `statusLine` key to `~/.claude/settings.json`.
+**Merge it into the file you already have.** The block below shows the key to add, not a whole
+file, and replacing your settings with it would drop everything else in them. If the file does
+not exist yet, create it with just this content, after `mkdir -p ~/.claude` on a machine where
+Claude Code has never run.
 
 ```json
 {
@@ -104,6 +114,18 @@ python3 statusline_picker.py --apply "model,context" --colors on
 python3 statusline_picker.py --colors off     # keep items, change colors only
 python3 statusline_picker.py --scheme claude-code   # switch colour scheme only
 ```
+
+Flags and environment variables that the examples above do not show:
+
+| Flag or variable | Effect |
+| --- | --- |
+| `--config FILE` | read and write this config instead of `~/.claude/statusline-config.json`. The `/statusline` command uses it to preview candidate bars |
+| `--js FILE` | use this renderer. Without it the picker takes `statusline.js` beside itself, then `~/.claude/statusline.js`, and a refusal names both |
+| `STATUSLINE_JS` | the same as `--js`, from the environment. It wins whenever it is set, even when empty |
+| `STATUSLINE_CONFIG` | the config path, for the renderer and the picker alike |
+| `STATUSLINE_PAYLOAD_DUMP` | the opt-in payload probe, described under the payload section below |
+| `STATUSLINE_CLAUDE_BIN` | the `claude` executable the `version` component checks, for when it is not on `PATH` |
+| `NO_COLOR` | any non-empty value turns the bar's colour off |
 
 `--apply` takes comma-separated component ids in render order (`""` saves an empty bar) and
 is strict where the config-file parse is forgiving: an unknown or duplicate id — or an
@@ -181,6 +203,13 @@ running `node statusline.js --segments`. There is no second copy to drift.
 | `session` | full session UUID — the exact string `claude --resume` takes |
 | `cost` | session cost in USD |
 | `version` | running version, and a restart hint if the install has moved on |
+
+The `version` restart hint compares the running version with the `package.json` of the install
+that `claude` on `PATH` resolves to: it follows the link and looks two directories up. That was
+measured on a Linux npm global install, where `claude` is a link into the package directory.
+Any layout where that lookup finds no `package.json` — a standalone binary, for one — shows
+the version dim, which means *unverified*, never *current*. It has not been measured on
+Windows.
 
 `directory`, `branch` and `github` are the fused `git-branch` component split into standalone
 pieces for people who want them separated or differently coloured; they are off by default, so
@@ -435,9 +464,9 @@ restore the mode afterwards — except that one is only *reported*, because by t
 measurement has already been made, and an exception from a `finally` does not travel beside the
 pending return, it replaces it.
 
-The exit code alone cannot carry this claim. The picker has **eight** routes to exit `2` and
-only one of them is the failed save — the other seven fire before `save_config` is reached.
-A missing `node`, an absent tty, a config that will not load all
+The exit code alone cannot carry this claim. The picker has more than a dozen routes to exit
+`2`, and only the failed save comes out of `save_config` — every other one fires before it is
+reached. A missing `node`, an absent tty, an unreadable `--payload` file all
 arrive with the config untouched and no temp stranded — precisely the footprint of a clean
 pass. So the probe also requires the save-specific `could not save` diagnostic, and when `2`
 arrives without it the probe returns `2` rather than `1`: a picker that never reached the save
