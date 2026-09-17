@@ -1862,11 +1862,22 @@ def selftest():
         def _alarm(_sig, _frame):
             raise TimeoutError("pty reader blocked")
 
+        def _watchdog(seconds):
+            # Fires after `seconds` and then every second until it is switched
+            # off. The exception it raises unwinds through the reader's own
+            # restore, which is a second blocking call: a one-shot alarm was
+            # spent by then, and the selftest hung instead of failing (observed
+            # 2026-09-17 on macos-26-arm64, Python 3.8 and 3.14).
+            signal.setitimer(signal.ITIMER_REAL, seconds, 1)
+
+        def _watchdog_off():
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
         master, slave = os.openpty()
         gen = None
         before = None
         old_handler = signal.signal(signal.SIGALRM, _alarm)
-        signal.alarm(10)
+        _watchdog(10)
         try:
             before = _termios.tcgetattr(slave)
             gen = read_keys_tty(_FdStdin(slave))
@@ -1895,7 +1906,7 @@ def selftest():
         except TimeoutError:
             check("pty reader: never blocks past the settle window", False)
         finally:
-            signal.alarm(0)
+            _watchdog_off()
             signal.signal(signal.SIGALRM, old_handler)
             if gen is not None:
                 gen.close()
@@ -1940,7 +1951,7 @@ def selftest():
             detail = ""
             verdict = False
             old = signal.signal(signal.SIGALRM, _alarm)
-            signal.alarm(arm_watchdog)
+            _watchdog(arm_watchdog)
             try:
                 fds.extend(os.openpty())
                 if _ingested(fds[0]):
@@ -1952,7 +1963,7 @@ def selftest():
             except OSError as exc:
                 verdict, detail = False, " -- pty fixture failed: %s" % exc
             finally:
-                signal.alarm(0)
+                _watchdog_off()
                 signal.signal(signal.SIGALRM, old)
                 for fd in fds:
                     os.close(fd)
