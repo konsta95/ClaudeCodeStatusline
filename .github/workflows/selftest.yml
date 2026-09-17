@@ -1,0 +1,75 @@
+# The built-in checks on every system the README names, plus the two labs that are
+# deterministic enough to gate on. The pty lab and the tmux lab stay out on purpose: they
+# lean on timing windows that have only been observed on one machine, and a flaky red mark
+# is worse than no mark. They are one command each to run by hand; see the README.
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    name: selftest, ${{ matrix.os }}, python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # the oldest release every hosted runner still offers, and the newest
+        python: ["3.8", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Built-in checks
+        run: python statusline_picker.py --selftest
+      - name: Preview through the real renderer, no TTY
+        run: python statusline_picker.py --show
+
+  floors:
+    # The README states Python 3.7 and Node 12.5 as floors. This job is what makes that a
+    # measurement. Ubuntu 22.04 because it is the newest image that still offers 3.7.
+    name: stated floors, python 3.7, node 12.5
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.7"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "12.5.0"
+      - name: Built-in checks
+        run: python statusline_picker.py --selftest
+
+  labs:
+    name: labs, exit contract and failed save
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Exit-code contract
+        run: python lab/exit_contract_lab.py
+      - name: A failed save writes nothing
+        run: python lab/save_failure_probe.py
