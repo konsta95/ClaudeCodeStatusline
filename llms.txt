@@ -18,7 +18,7 @@ output). MIT licensed.
 
 ## Evidence
 
-- [lab/picker_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/picker_lab.py): pty regression lab — 29 cases driving the real picker binary under sandboxed HOME directories, with the observed-failing pre-fix log kept beside the post-fix log
+- [lab/picker_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/picker_lab.py): pty regression lab driving the real picker binary under sandboxed HOME directories; exits non-zero on any finding, with the observed-failing pre-fix log kept beside the post-fix log
 - [lab/exit_contract_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/exit_contract_lab.py): pins that environmental failures exit 2 and are never relabelled as picker defects (exit 1)
 - [lab/carrier_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/carrier_lab.py): eleven live tmux arms over the pane-and-sentinel handoff, extracted from the shipped slash command rather than retyped
 - [lab/save_failure_probe.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/save_failure_probe.py): proves a failed save writes nothing, measured against a genuinely unsavable directory

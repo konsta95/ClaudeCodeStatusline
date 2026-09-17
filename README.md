@@ -272,8 +272,11 @@ asking every user to rediscover them in their own render script:
 ## The pty regression lab
 
 `lab/picker_lab.py` drives the real picker binary through a pty pair, under sandboxed `HOME`
-directories, across 29 cases: launch-window keystrokes, ESC/CSI/SS3 parsing, hung and garbage
-renderers, concurrent saves, narrow terminals, and teardown.
+directories: launch-window keystrokes, ESC/CSI/SS3 parsing, hung and garbage renderers,
+concurrent saves, narrow terminals, and teardown. Each case prints one `EVIDENCE` line, and the
+run exits `0` only when every case holds and every comparator has been seen flipping on its
+known-bad input. A single `FINDING` exits `1`, because the lines are for a reader and the exit
+code is for a caller.
 
 ```bash
 python3 lab/picker_lab.py
@@ -292,7 +295,9 @@ which is why the truncated tails, raw escape sequences and uneven column widths 
 there. The pre-fix log was captured when the lab still ran out of a volatile scratch
 directory, so its two redactions (`SCRATCH-REDACTED`) covered a path carrying a session
 UUID; the lab now scratches inside the repo, so the post-fix log's two redactions
-(`REPO-REDACTED`) cover only a checkout path and it contains no identifiers at all.
+(`REPO-REDACTED`) cover only a checkout path and it contains no identifiers at all. The
+pre-fix log also predates the exit rule above, which is why it ends `LAB COMPLETE` under its
+`FINDING` lines; the same run today ends `LAB FAILED` and exits `1`.
 
 ### The exit-code contract
 
