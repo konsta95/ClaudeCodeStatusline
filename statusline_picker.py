@@ -1879,6 +1879,14 @@ def selftest():
         old_handler = signal.signal(signal.SIGALRM, _alarm)
         _watchdog(10)
         try:
+            # No echo on this fixture. The first key is written before the
+            # reader has entered raw mode, so a cooked slave would echo it, and
+            # nothing here reads the master. macOS holds raw entry with
+            # TCSADRAIN until that echo is read, which is never; Linux does not
+            # wait. A real terminal reads its side all the time.
+            quiet = _termios.tcgetattr(slave)
+            quiet[3] &= ~_termios.ECHO
+            _termios.tcsetattr(slave, _termios.TCSANOW, quiet)
             before = _termios.tcgetattr(slave)
             gen = read_keys_tty(_FdStdin(slave))
             os.write(master, b"\x1b[A")
