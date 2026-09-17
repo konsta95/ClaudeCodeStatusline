@@ -95,10 +95,21 @@ const SCHEMES = {
   },
 };
 
+// Every string that reaches the terminal from outside this file passes through
+// here: directory and branch names come off the filesystem, the rest off the
+// payload, and any of them can carry C0/C1 control bytes. An ESC in a directory
+// name would otherwise be executed by the terminal on every refresh, and a
+// newline would break the one-line contract. The only escapes on the line are
+// the ones this file adds itself.
+function clean(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+}
+
 // Wrap text in a color only when the slot actually carries one — an empty
 // slot must contribute zero escape bytes.
 function paint(code, text) {
-  return code ? code + text + C.reset : text;
+  const safe = clean(text);
+  return code ? code + safe + C.reset : safe;
 }
 
 // Per-item override spec: a named normal-intensity ansi color or "#RRGGBB".
@@ -145,6 +156,13 @@ function effortColor(level, pal) {
   return pal.dim;
 }
 
+// The last path component, except at the filesystem root, whose basename is
+// empty: the root still has a name, and an empty one would put a bare
+// separator on the line.
+function dirName(dir) {
+  return path.basename(dir) || dir;
+}
+
 // Find the git root by walking upward; read the branch straight from .git/HEAD
 // (no git process is spawned — the statusline runs on every refresh).
 // The payload's workspace.repo / workspace.git_worktree do not carry the branch, so they
@@ -158,12 +176,13 @@ function gitInfo(startDir) {
       let headFile = path.join(gitPath, 'HEAD');
       if (st.isFile()) {
         // worktree: .git is a file pointing at the real git directory
+        // a relative gitdir is relative to the worktree, not to this process
         const m = fs.readFileSync(gitPath, 'utf8').match(/gitdir:\s*(.+)/);
-        if (m) headFile = path.join(m[1].trim(), 'HEAD');
+        if (m) headFile = path.join(path.resolve(dir, m[1].trim()), 'HEAD');
       }
       const head = fs.readFileSync(headFile, 'utf8').trim();
       const ref = head.match(/^ref:\s*refs\/heads\/(.+)$/);
-      return { repo: path.basename(dir), branch: ref ? ref[1] : head.slice(0, 7) };
+      return { repo: dirName(dir), branch: ref ? ref[1] : head.slice(0, 7) };
     } catch (_) { /* no .git here — keep walking up */ }
     const parent = path.dirname(dir);
     if (parent === dir) break;
@@ -286,6 +305,17 @@ function versionSeg(running, pal) {
   return paint(pal.dim, 'v' + running);
 }
 
+// Where the payload probe writes, or null when it is off. See the call site for
+// why the off spellings and relative names are both refused.
+function probePath(setting) {
+  if (typeof setting !== 'string') return null;
+  const value = setting.trim();
+  if (/^(1|true|yes|on)$/i.test(value)) {
+    return path.join(os.homedir(), '.claude', 'statusline-payload-last.json');
+  }
+  return path.isAbsolute(value) ? value : null;
+}
+
 // ── Segment registry + selection config ─────────────────────────────────────
 // Mirrors Codex's status_line model (codex-rs/tui/src/bottom_pane/status_line_setup.rs,
 // read 2026-08-25): the items array is the selection AND the render order; an unknown id is
@@ -380,14 +410,15 @@ process.stdin.on('end', () => {
     //
     // OFF BY DEFAULT and opt-in only. The payload contains your session id, working
     // directory, cost and rate-limit state — set STATUSLINE_PAYLOAD_DUMP only if you want
-    // that written to disk. "1"/"true" writes the default location under $HOME (so a
-    // redirected HOME redirects the probe with it); any other value is used as the path.
-    // Never let the probe take the line down.
-    const dumpSetting = process.env.STATUSLINE_PAYLOAD_DUMP;
-    if (dumpSetting) {
-      const dumpPath = (dumpSetting === '1' || dumpSetting === 'true')
-        ? path.join(os.homedir(), '.claude', 'statusline-payload-last.json')
-        : dumpSetting;
+    // that written to disk. 1/true/yes/on writes the default location under $HOME (so a
+    // redirected HOME redirects the probe with it); an ABSOLUTE path writes there.
+    // Everything else is off, and that is deliberate on both counts: 0/false/no/off are
+    // how people switch a variable off, and reading them as a file name wrote the
+    // payload into a file called "0"; a relative name resolves against whatever
+    // directory Claude Code happens to be in, which scatters session data into project
+    // trees. Never let the probe take the line down.
+    const dumpPath = probePath(process.env.STATUSLINE_PAYLOAD_DUMP);
+    if (dumpPath) {
       // Unique temp name, not a fixed ".tmp": the status line re-renders on every
       // refresh and several sessions can render at once, so a shared temp name lets
       // one writer's partial bytes get renamed into place by another.
@@ -420,12 +451,12 @@ process.stdin.on('end', () => {
         const ov = cfg.itemColors['git-branch'];
         return git
           ? paint(ov || pal.path, git.repo) + paint(ov || pal.branch, '(' + git.branch + ')')
-          : paint(ov || pal.path, path.basename(cwd));
+          : paint(ov || pal.path, dirName(cwd));
       },
       // The granular trio behind the fused segment, each independently
       // toggleable: directory always renders, branch and github only where a
       // repo / github origin actually exists.
-      'directory': () => paint(accent('directory', pal.path), path.basename(cwd)),
+      'directory': () => paint(accent('directory', pal.path), dirName(cwd)),
       'branch': () => {
         const git = gitInfo(cwd);
         return git ? paint(accent('branch', pal.branch), git.branch) : null;
@@ -471,16 +502,34 @@ process.stdin.on('end', () => {
       'version': () => versionSeg(input.version, pal),
     };
 
+    // One segment that throws costs that segment, not the bar: payload fields shift
+    // type between Claude Code versions, and the other ten values are still true. The
+    // failed segment is MARKED rather than dropped — "id!" on the dim slot — because a
+    // segment that silently vanishes is indistinguishable from one with no data.
     const parts = [];
     for (const id of cfg.items) {
-      const seg = builders[id]();
+      let seg;
+      try {
+        seg = builders[id]();
+      } catch (_) {
+        seg = paint(pal.dim, id + '!');
+      }
       if (seg) parts.push(seg);
     }
     out = parts.join(paint(pal.sep, '|'));
-    if (!cfg.colors) out = out.replace(/\x1b\[[0-9;]*m/g, '');
+    // NO_COLOR (no-color.org): present and non-empty means no colour, whatever the
+    // config says; empty is the same as unset.
+    if (!cfg.colors || process.env.NO_COLOR) out = out.replace(/\x1b\[[0-9;]*m/g, '');
   } catch (e) {
     // Never leave the bar blank: a named error is debuggable, an empty line is not.
-    out = C.dim + 'statusline error: ' + e.message + C.reset;
+    // The message can quote the payload (JSON.parse does), so it is cleaned like
+    // every other outside string.
+    out = C.dim + 'statusline error: ' + clean(e.message) + C.reset;
   }
   process.stdout.write(out);
 });
+
+// The reader can go away before the line is written — a refresh cancelled
+// mid-flight closes the pipe. That is not an error worth a stack trace on stderr
+// and exit 1; there is simply no one left to draw for.
+process.stdout.on('error', () => {});

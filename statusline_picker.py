@@ -1531,6 +1531,123 @@ def selftest():
                       fresh.returncode == 0 and bool(bare)
                       and _bar(fresh_cfg) == bare)
 
+                # ── the renderer's own contract, through the real file ──
+                # Each check below was observed failing on the renderer as it
+                # stood before the behaviour it names existed.
+                def _render(payload, config=None, extra_env=None, cwd=None):
+                    r_env = dict(os.environ)
+                    for name in ("STATUSLINE_PAYLOAD_DUMP", "NO_COLOR"):
+                        r_env.pop(name, None)
+                    r_env["HOME"] = td
+                    cfg_file = os.path.join(td, "render-cfg.json")
+                    if config is None:
+                        cfg_file = os.path.join(td, "no-such-config.json")
+                    else:
+                        with open(cfg_file, "w") as cfh:
+                            json.dump(config, cfh)
+                    r_env["STATUSLINE_CONFIG"] = cfg_file
+                    r_env.update(extra_env or {})
+                    return subprocess.run(
+                        [node, DEFAULT_JS],
+                        input=json.dumps(payload).encode("utf-8"),
+                        capture_output=True, env=r_env, cwd=cwd,
+                        timeout=PREVIEW_TIMEOUT)
+
+                def _payload(**changes):
+                    fresh_payload = json.loads(json.dumps(FIXTURE_PAYLOAD))
+                    fresh_payload.pop("workspace", None)
+                    fresh_payload.update(changes)
+                    return fresh_payload
+
+                plain = {"items": ["directory", "model"], "colors": False}
+
+                # payload probe: the off spellings are OFF. "0" used to be a
+                # truthy string, which turned the probe on and wrote the
+                # payload into a file named 0 in the working directory. The
+                # two positive arms prove the variable reaches the renderer,
+                # without which the negative arm would pass for free.
+                dump_cwd = os.path.join(td, "dump-cwd")
+                os.makedirs(dump_cwd)
+                default_probe = os.path.join(
+                    td, ".claude", "statusline-payload-last.json")
+                os.makedirs(os.path.dirname(default_probe), exist_ok=True)
+                for off in ("0", "false", "No", "off", "relative-name.json"):
+                    _render(_payload(), plain,
+                            {"STATUSLINE_PAYLOAD_DUMP": off}, cwd=dump_cwd)
+                check("payload probe: off spellings and relative names write nothing",
+                      os.listdir(dump_cwd) == []
+                      and not os.path.exists(default_probe))
+                _render(_payload(), plain,
+                        {"STATUSLINE_PAYLOAD_DUMP": "1"}, cwd=dump_cwd)
+                abs_probe = os.path.join(td, "abs-probe.json")
+                _render(_payload(), plain,
+                        {"STATUSLINE_PAYLOAD_DUMP": abs_probe}, cwd=dump_cwd)
+                check("payload probe: 1 writes the default location, an "
+                      "absolute path writes there",
+                      os.path.exists(default_probe) and os.path.exists(abs_probe)
+                      and os.listdir(dump_cwd) == [])
+
+                # linked worktree whose .git file holds a RELATIVE gitdir: it
+                # is relative to the worktree, not to the renderer's cwd
+                wt = os.path.join(td, "wt-fixture", "tree")
+                wt_git = os.path.join(td, "wt-fixture", "real.git", "worktrees", "tree")
+                os.makedirs(wt)
+                os.makedirs(wt_git)
+                with open(os.path.join(wt, ".git"), "w") as gfh:
+                    gfh.write("gitdir: ../real.git/worktrees/tree\n")
+                with open(os.path.join(wt_git, "HEAD"), "w") as gfh:
+                    gfh.write("ref: refs/heads/feature-x\n")
+                wt_out = _render(_payload(cwd=wt),
+                                 {"items": ["git-branch"], "colors": False},
+                                 cwd=dump_cwd).stdout.decode("utf-8", "replace")
+                check("worktree: a relative gitdir resolves against the worktree",
+                      wt_out == "tree(feature-x)")
+
+                # a reader that goes away first must not earn a stack trace
+                gone = subprocess.Popen(
+                    [node, DEFAULT_JS], stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                gone.stdout.close()
+                gone.stdin.write(json.dumps(_payload()).encode("utf-8"))
+                gone.stdin.close()
+                gone_err = gone.stderr.read()
+                gone.stderr.close()
+                check("closed stdout: exits 0 with nothing on stderr",
+                      gone.wait(timeout=PREVIEW_TIMEOUT) == 0 and gone_err == b"")
+
+                # one field of the wrong type costs one segment, not the bar
+                bad_field = _render(
+                    _payload(cwd=123),
+                    {"items": ["git-branch", "model", "context"], "colors": False},
+                ).stdout.decode("utf-8", "replace")
+                check("bad field: the segment is marked, the rest still renders",
+                      "statusline error" not in bad_field
+                      and bad_field.startswith("git-branch!|")
+                      and "Fable5" in bad_field and "83K/1M" in bad_field)
+
+                # control bytes in a name never reach the terminal
+                hostile = _render(
+                    _payload(cwd="/srv/ev\x1b]0;owned\x07il\nna\x9bme"),
+                    {"items": ["directory"], "colors": False},
+                ).stdout.decode("utf-8", "replace")
+                check("control bytes: stripped from rendered text",
+                      hostile == "ev]0;ownedilname")
+
+                # the filesystem root has a name too
+                root_out = _render(_payload(cwd="/"), plain
+                                   ).stdout.decode("utf-8", "replace")
+                check("root directory: rendered as /, not as an empty segment",
+                      root_out.startswith("/|"))
+
+                # NO_COLOR, per no-color.org: present and non-empty turns
+                # colour off; empty is the same as unset
+                coloured = {"items": ["directory", "model"], "colors": True}
+                nc_on = _render(_payload(), coloured, {"NO_COLOR": "1"}).stdout
+                nc_empty = _render(_payload(), coloured, {"NO_COLOR": ""}).stdout
+                check("NO_COLOR: non-empty strips colour, empty does not",
+                      b"\x1b" not in nc_on and bool(nc_on)
+                      and b"\x1b[" in nc_empty)
+
                 # Renderer skew: a renderer that answers --segments but not
                 # --schemes (an older statusline.js beside a newer picker)
                 # must degrade, not brick. Contract: implicit paths proceed
