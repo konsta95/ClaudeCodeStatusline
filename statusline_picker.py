@@ -177,10 +177,12 @@ SCREEN_ENTER = "\x1b[?7l\x1b[?25l"
 SCREEN_LEAVE = "\x1b[?7h\x1b[?25h"
 
 # The accent ring 'a' cycles a segment through: None = the scheme's own slot,
-# then the renderer's named override colors (its NAMED table -- the renderer
-# validates specs, so a name here it does not know would be silently dropped
-# from the bar; the selftest pins the two lists against drift via --schemes'
-# sibling contract note in the docs). Hex specs are config-file-only.
+# then the renderer's named override colors (its NAMED table). The renderer
+# validates specs, so a name here that it does not know would be silently
+# dropped from the bar. The selftest pins that: it renders every name on this
+# ring through the real renderer under the mono scheme, where an escape on the
+# line can only come from an honoured override. Hex specs are
+# config-file-only.
 ACCENT_RING = (None, "red", "green", "yellow", "blue",
                "magenta", "cyan", "white", "dim")
 
@@ -408,10 +410,14 @@ def save_config(path, items, colors, scheme="codex", item_colors=None):
     """Atomic write via a UNIQUE temp name in the target directory: readers
     (the statusline may render at any moment) see old or new bytes, never
     partial, and two concurrent savers cannot share a temp file -- the later
-    rename wins whole."""
+    rename wins whole. A config directory that does not exist yet is created:
+    the alternative was an error naming the TEMP file, which tells the user
+    nothing about what to fix. Every failure is still an OSError, which the
+    callers report as exit 2."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
-        prefix=os.path.basename(path) + ".", suffix=".tmp",
-        dir=os.path.dirname(path) or ".",
+        prefix=os.path.basename(path) + ".", suffix=".tmp", dir=directory,
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -428,6 +434,15 @@ def save_config(path, items, colors, scheme="codex", item_colors=None):
         except OSError:
             pass
         raise
+
+
+def colors_report(colors, scheme):
+    """The value of the 'colors:' line in a save report. It names the scheme
+    even when colors are off: --scheme alone is a save of exactly that value,
+    and a report that left it out would not say what was saved."""
+    if colors:
+        return "on (%s)" % scheme
+    return "off (scheme %s is saved and applies once colors are on)" % scheme
 
 
 def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None,
@@ -1648,6 +1663,70 @@ def selftest():
                       b"\x1b" not in nc_on and bool(nc_on)
                       and b"\x1b[" in nc_empty)
 
+                # a save into a directory that does not exist yet creates it:
+                # the alternative was exit 2 naming a TEMP file the user never
+                # asked for, which says nothing about what to fix
+                deep_cfg = os.path.join(td, "not-yet", "deeper", "cfg.json")
+                try:
+                    save_config(deep_cfg, ["model"], True)
+                    deep_ok = json.load(open(deep_cfg)).get("items") == ["model"]
+                except OSError:
+                    deep_ok = False
+                check("save: a missing config directory is created", deep_ok)
+
+                # --scheme alone is a save of exactly that value, so the report
+                # has to name it even while colors are off
+                quiet_cfg = os.path.join(td, "quiet-cfg.json")
+                quiet = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--scheme", "mono", "--colors", "off",
+                     "--config", quiet_cfg, "--js", DEFAULT_JS],
+                    capture_output=True, text=True)
+                check("save report: names the scheme even with colors off",
+                      quiet.returncode == 0 and "colors: off" in quiet.stdout
+                      and "mono" in quiet.stdout)
+
+                # no renderer in EITHER layout: the refusal names every place
+                # it looked, not just the first
+                bare_home = os.path.join(td, "bare-home")
+                lone_dir = os.path.join(td, "lone-tools")
+                os.makedirs(bare_home)
+                os.makedirs(lone_dir)
+                lone = os.path.join(lone_dir, "statusline_picker.py")
+                shutil.copy2(os.path.abspath(__file__), lone)
+                lone_env = dict(os.environ)
+                lone_env.pop("STATUSLINE_JS", None)
+                lone_env["HOME"] = bare_home
+                missing = subprocess.run(
+                    [sys.executable, lone, "--show"],
+                    capture_output=True, text=True, env=lone_env)
+                check("missing renderer: the refusal names both layouts it tried",
+                      missing.returncode == 2
+                      and os.path.join(lone_dir, "statusline.js") in missing.stderr
+                      and os.path.join(bare_home, ".claude", "statusline.js")
+                      in missing.stderr)
+
+                # the accent ring against the renderer that judges it. Under
+                # mono the scheme emits no escape bytes at all, so an escape
+                # on the line means the override was honoured and its absence
+                # means the renderer dropped the name. The bogus name is the
+                # known-bad arm: without it a ring of anything would pass.
+                def _ring_honoured(names):
+                    for name in names:
+                        bar = _render(
+                            _payload(),
+                            {"items": ["directory"], "colors": True,
+                             "scheme": "mono",
+                             "item_colors": {"directory": name}}).stdout
+                        if b"\x1b[" not in bar:
+                            return False
+                    return True
+
+                check("accent ring: the renderer honours every name on it",
+                      _ring_honoured(ACCENT_RING[1:]))
+                check("accent ring: a name the renderer does not know is caught",
+                      not _ring_honoured(("orange",)))
+
                 # Renderer skew: a renderer that answers --segments but not
                 # --schemes (an older statusline.js beside a newer picker)
                 # must degrade, not brick. Contract: implicit paths proceed
@@ -1954,8 +2033,15 @@ def main():
     # path gets a readable stand-in so a script that expanded an unset variable
     # does not produce a message that trails off into nothing.
     if not os.path.isfile(args.js):
-        print("error: renderer not found: %s" % (args.js or "(empty path)"),
-              file=sys.stderr)
+        # When the path came from resolution rather than from the caller,
+        # resolve_js hands back the first candidate only so there is a path to
+        # name -- and naming it alone sends an installed user to a clone they
+        # do not have. Say every place that was tried.
+        tried = ""
+        if args.js == DEFAULT_JS and "STATUSLINE_JS" not in os.environ:
+            tried = " (looked in: %s)" % ", ".join(JS_CANDIDATES)
+        print("error: renderer not found: %s%s"
+              % (args.js or "(empty path)", tried), file=sys.stderr)
         sys.exit(2)
 
     if args.show and (args.apply is not None or args.colors or args.scheme is not None):
@@ -2021,7 +2107,7 @@ def main():
             sys.exit(2)
         print("saved %s" % args.config)
         print("items:  %s" % (", ".join(items) or "(none -- empty line)"))
-        print("colors: %s" % (("on (%s)" % scheme) if colors else "off"))
+        print("colors: %s" % colors_report(colors, scheme))
         print("takes effect on the next statusline refresh; delete the file to restore defaults")
         sys.exit(0)
 
@@ -2147,7 +2233,7 @@ def main():
             sys.exit(2)
         print("saved %s" % args.config)
         print("items:  %s" % (", ".join(state.enabled) or "(none -- empty line)"))
-        print("colors: %s" % (("on (%s)" % state.scheme) if state.colors else "off"))
+        print("colors: %s" % colors_report(state.colors, state.scheme))
         print("takes effect on the next statusline refresh; delete the file to restore defaults")
     elif outcome == "customize":
         # Deliberately says what the human asked for, not what should happen
