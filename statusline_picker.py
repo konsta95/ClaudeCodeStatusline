@@ -1918,10 +1918,35 @@ def selftest():
             signal.signal(signal.SIGALRM, old_handler)
             if gen is not None:
                 gen.close()
-            restored = before is not None and _termios.tcgetattr(slave) == before
+            after = _termios.tcgetattr(slave) if before is not None else None
             os.close(master)
             os.close(slave)
-        check("pty reader: termios restored on close", restored)
+
+        def _settings(attrs):
+            # PENDIN is the kernel's own note that typed-ahead input waits to be
+            # re-read. macOS raises it whenever canonical mode is re-entered, so
+            # it is state the reader cannot put back, not a setting it left
+            # behind. Everything else has to come back exactly.
+            settings = list(attrs)
+            settings[3] &= ~getattr(_termios, "PENDIN", 0)
+            return settings
+
+        restored = before is not None and _settings(after) == _settings(before)
+        def _difference(field, was, now):
+            if field == "cc":
+                return "cc " + ", ".join(
+                    "[%d] %r -> %r" % (slot, w, n)
+                    for slot, (w, n) in enumerate(zip(was, now)) if w != n)
+            return "%s %#x -> %#x" % (field, was, now)
+
+        differs = ""
+        if before is not None and not restored:
+            fields = ("iflag", "oflag", "cflag", "lflag", "ispeed", "ospeed", "cc")
+            differs = " -- differs in " + "; ".join(
+                _difference(field, was, now)
+                for field, was, now in zip(fields, _settings(before), _settings(after))
+                if was != now)
+        check("pty reader: termios restored on close" + differs, restored)
 
         # Launch-window guard. The byte must be INGESTED before raw entry, and
         # its echo on the master is the proof: a byte still in flight to the
