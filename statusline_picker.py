@@ -1103,6 +1103,12 @@ def selftest():
     check("normalize skips unknown + dupes", normalize(["c", "zz", "a", "c"], known) == ["c", "a"])
     check("normalize empty stays empty", normalize([], known) == [])
 
+    # a sandboxed child: both names, because which one a platform reads differs.
+    # Only the Windows runs can see the behaviour; this sees the helper anywhere.
+    check("sandbox home: HOME and USERPROFILE are both redirected",
+          home_env({"HOME": "/real", "KEEP": "1"}, "/sandbox")
+          == {"HOME": "/sandbox", "USERPROFILE": "/sandbox", "KEEP": "1"})
+
     # --apply parse: strict where the file parse above is forgiving. The two
     # refusal checks run against known-bad input by construction -- they are the
     # observation that the guard fires, not an assumption that it would.
@@ -1873,6 +1879,7 @@ def selftest():
         def _watchdog_off():
             signal.setitimer(signal.ITIMER_REAL, 0)
 
+        close_watchdog = 5
         master, slave = os.openpty()
         gen = None
         before = None
@@ -1914,13 +1921,24 @@ def selftest():
         except TimeoutError:
             check("pty reader: never blocks past the settle window", False)
         finally:
-            _watchdog_off()
+            # close() is where the reader restores the terminal on every run that
+            # did not time out, so the watchdog has to cover it as well. Switched
+            # off first, a restore that blocks hung the selftest with all eleven
+            # key checks green.
+            close_returned = True
+            try:
+                _watchdog(close_watchdog)
+                if gen is not None:
+                    gen.close()
+            except TimeoutError:
+                close_returned = False
+            finally:
+                _watchdog_off()
             signal.signal(signal.SIGALRM, old_handler)
-            if gen is not None:
-                gen.close()
             after = _termios.tcgetattr(slave) if before is not None else None
             os.close(master)
             os.close(slave)
+        check("pty reader: the restore on close returns", close_returned)
 
         def _settings(attrs):
             # PENDIN is the kernel's own note that typed-ahead input waits to be
@@ -1929,9 +1947,14 @@ def selftest():
             # behind. Everything else has to come back exactly.
             settings = list(attrs)
             settings[3] &= ~getattr(_termios, "PENDIN", 0)
+            # tcgetattr hands VMIN and VTIME back as ints while ICANON is clear
+            # and as one-byte strings while it is set: same value, other type
+            settings[6] = [bytes([c]) if isinstance(c, int) else c
+                           for c in settings[6]]
             return settings
 
         restored = before is not None and _settings(after) == _settings(before)
+
         def _difference(field, was, now):
             if field == "cc":
                 return "cc " + ", ".join(
@@ -1946,7 +1969,8 @@ def selftest():
                 _difference(field, was, now)
                 for field, was, now in zip(fields, _settings(before), _settings(after))
                 if was != now)
-        check("pty reader: termios restored on close" + differs, restored)
+        check("pty reader: termios restored on close, PENDIN aside" + differs,
+              restored)
 
         # Launch-window guard. The byte must be INGESTED before raw entry, and
         # its echo on the master is the proof: a byte still in flight to the
