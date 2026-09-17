@@ -8,13 +8,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   selftest:
@@ -29,6 +30,8 @@ jobs:
         python: ["3.8", "3.14"]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -38,17 +41,33 @@ jobs:
       # -u so that a run which hangs still shows the last check it finished
       - name: Built-in checks
         run: python -u statusline_picker.py --selftest
+      # --show exits 0 even when the renderer failed and says so in brackets, so the exit
+      # code alone cannot fail this step. 83K/1M is computed by the renderer out of the
+      # fixture payload, which is what a runner with no payload probe previews.
       - name: Preview through the real renderer, no TTY
-        run: python statusline_picker.py --show
+        shell: python
+        run: |
+          import subprocess, sys
+          shown = subprocess.run([sys.executable, "statusline_picker.py", "--show"],
+                                 capture_output=True)
+          sys.stdout.buffer.write(shown.stdout + shown.stderr)
+          sys.stdout.flush()
+          preview = [line for line in shown.stdout.splitlines() if line.startswith(b"preview:")]
+          rendered = (shown.returncode == 0 and len(preview) == 1
+                      and b"[preview" not in preview[0] and b"83K/1M" in preview[0])
+          sys.exit(0 if rendered else "the preview line is missing, bracketed, or not the fixture bar")
 
   floors:
     # The README states Python 3.7 and Node 12.5 as floors. This job is what makes that a
-    # measurement. Ubuntu 22.04 because it is the newest image that still offers 3.7.
+    # measurement. Ubuntu 22.04 because it is the newest image that still offers 3.7; when
+    # that image is retired this job goes with it, and the README's floor sentence with it.
     name: stated floors, python 3.7, node 12.5
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.7"
@@ -64,6 +83,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
