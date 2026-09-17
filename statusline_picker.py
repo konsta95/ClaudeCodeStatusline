@@ -534,7 +534,7 @@ def format_age(seconds):
 def payload_label(live_path, age, elapsed):
     """What the preview was rendered FROM, in one phrase. Pure: no clock, no I/O.
 
-    Contract, from owner decision fe3c4f4d57ce -- report the age, set no
+    Contract, by design -- report the age, set no
     threshold. Nothing here rejects a probe, falls back off one, or warns about
     one. A stale probe still previews; it is only named.
 
@@ -596,7 +596,7 @@ def pick_payload(probe_path, explicit=False):
     by the same branch a live one is. Nothing in the bytes distinguishes them,
     which is why the distinction has to be carried out of here separately.
 
-    Per fe3c4f4d57ce the age is REPORTED and never acted on -- no threshold
+    By that same contract the age is REPORTED and never acted on -- no threshold
     rejects a probe, no age triggers the fixture fallback, and the missing and
     invalid branches above are unchanged. The mtime is None for fixture data,
     which has no probe behind it and therefore no age; that is not an age of 0,
@@ -1398,27 +1398,27 @@ def selftest():
         # renderer-dependent case below SKIPPED when resolution missed, so a
         # check that resolution is RIGHT has to be one that cannot skip.
         clone_js = os.path.join(td, "clone", "statusline.js")
-        estate_js = os.path.join(td, "estate", ".claude", "statusline.js")
-        absent_sibling = os.path.join(td, "estate", ".claude", "tools",
+        installed_js = os.path.join(td, "installed", ".claude", "statusline.js")
+        absent_sibling = os.path.join(td, "installed", ".claude", "tools",
                                       "statusline.js")
-        for made in (clone_js, estate_js):
+        for made in (clone_js, installed_js):
             os.makedirs(os.path.dirname(made), exist_ok=True)
             open(made, "w").close()
         check("resolve_js: a clone takes the sibling renderer",
-              resolve_js({}, (clone_js, estate_js)) == clone_js)
+              resolve_js({}, (clone_js, installed_js)) == clone_js)
         check("resolve_js: an install with no sibling falls through to ~/.claude",
-              resolve_js({}, (absent_sibling, estate_js)) == estate_js)
+              resolve_js({}, (absent_sibling, installed_js)) == installed_js)
         check("resolve_js: STATUSLINE_JS outranks both layouts",
               resolve_js({"STATUSLINE_JS": clone_js},
-                         (absent_sibling, estate_js)) == clone_js)
+                         (absent_sibling, installed_js)) == clone_js)
         check("resolve_js: an absent STATUSLINE_JS is honoured verbatim, never "
               "swapped for a renderer the caller did not name",
               resolve_js({"STATUSLINE_JS": absent_sibling},
-                         (clone_js, estate_js)) == absent_sibling)
+                         (clone_js, installed_js)) == absent_sibling)
         check("resolve_js: an EMPTY STATUSLINE_JS is set, so it wins too -- a "
               "script that expanded an unset variable must not silently get "
               "the default renderer",
-              resolve_js({"STATUSLINE_JS": ""}, (clone_js, estate_js)) == "")
+              resolve_js({"STATUSLINE_JS": ""}, (clone_js, installed_js)) == "")
         check("resolve_js: with nothing on disk it names the first candidate",
               resolve_js({}, (absent_sibling, absent_sibling + ".x"))
               == absent_sibling)
@@ -1428,7 +1428,7 @@ def selftest():
         os.makedirs(dir_js, exist_ok=True)
         check("resolve_js: a DIRECTORY named statusline.js loses to the real "
               "renderer behind it",
-              resolve_js({}, (dir_js, estate_js)) == estate_js)
+              resolve_js({}, (dir_js, installed_js)) == installed_js)
 
         # preview plumbing through a fake renderer: env config + stdin arrive
         node = shutil.which("node")

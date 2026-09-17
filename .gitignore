@@ -10,5 +10,9 @@ statusline-payload-last.json
 # Your own selection. The example lives at statusline-config.example.json.
 statusline-config.json
 
+# Local Claude Code state for this checkout: session notes, per-project settings.
+# Never part of the project.
+.claude/
+
 __pycache__/
 *.pyc
