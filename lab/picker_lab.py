@@ -134,7 +134,8 @@ class PtyPicker:
     slave to measure termios (ECHO/ICANON are cleared by tty.setraw and
     must be back after exit)."""
 
-    def __init__(self, home, args=(), cols=120, rows=40):
+    def __init__(self, home, args=(), cols=120, rows=40, picker=None):
+        picker = picker or PICKER
         self.master, self.slave = os.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ,
                     struct.pack("HHHH", rows, cols, 0, 0))
@@ -148,7 +149,7 @@ class PtyPicker:
             os.dup2(self.slave, 0)
             os.dup2(self.slave, 1)
             os.dup2(self.slave, 2)
-            os.execve(PY, [PY, PICKER] + list(args), child_env(home))
+            os.execve(PY, [PY, picker] + list(args), child_env(home))
             os._exit(127)
 
     def read_until(self, needle, deadline_s):
@@ -759,6 +760,78 @@ def main():
              % (hid_before_frame, hide_idx, frame_idx, shown_after_quit, code))
     p.kill_close()
 
+    # ---- P11 / P12: SIGTERM and SIGHUP while the picker owns the pane. Both
+    # kill a Python process WITHOUT unwinding it, so no finally runs and the
+    # pane's shell inherits raw mode, no autowrap and a hidden cursor.
+    # Contract: the pane is put back first, and the picker then dies by the
+    # SAME signal, so a caller's wait status is what it always was. raw-mid-run
+    # is part of the verdict because a picker that never reached raw mode
+    # would pass the termios half for free. (Pre-fix: termios left raw, no
+    # restore bytes after the signal.)
+    for case, signum in (("P11-sigterm", signal.SIGTERM),
+                         ("P12-sighup", signal.SIGHUP)):
+        home = make_home(case.split("-")[0].lower())
+        p = PtyPicker(home)
+        p.read_until(b"statusline picker", 15)
+        p.drain()            # the picker is now blocked in its raw-mode read
+        raw_mid = not p.termios_restored()
+        mark = len(p.buf)
+        os.kill(p.pid, signum)
+        status = p.wait(5)
+        p.drain()
+        died_by = (os.WTERMSIG(status)
+                   if status is not None and status >= 0 and os.WIFSIGNALED(status)
+                   else None)
+        restored = p.termios_restored()
+        tail = p.buf[mark:]
+        screen_back = b"\x1b[?25h" in tail and b"\x1b[?7h" in tail
+        clean = raw_mid and died_by == signum and restored and screen_back
+        evidence(case, "ok" if clean else "FINDING",
+                 "raw-mid-run=%s died-by=%s (want %d) termios-restored=%s "
+                 "cursor+autowrap-restored=%s"
+                 % (raw_mid, died_by, signum, restored, screen_back))
+        p.kill_close()
+
+    # ---- P13: Ctrl-C in the LAUNCH WINDOW. Until the reader reaches raw mode
+    # the terminal delivers Ctrl-C as SIGINT, not as a byte, so the documented
+    # cancel key arrived as a KeyboardInterrupt traceback and a signal death.
+    # The window is held open rather than raced for: the sandbox renderer
+    # answers --segments and --schemes at once but stalls every render, and
+    # drops a marker first -- so the ^C goes out while the first preview is
+    # provably in flight. cooked-at-send is part of the verdict: a ^C that
+    # arrived after raw entry would be P9 again and say nothing new.
+    home = make_home("p13")
+    real_copy = os.path.join(home, ".claude", "statusline-real.js")
+    os.replace(os.path.join(home, ".claude", "statusline.js"), real_copy)
+    marker = os.path.join(home, "render-started")
+    with open(os.path.join(home, ".claude", "statusline.js"), "w") as fh:
+        fh.write(
+            "const flags = [\"--segments\", \"--schemes\"];\n"
+            "if (flags.some((f) => process.argv.includes(f))) {\n"
+            "  require(%s);\n"
+            "} else {\n"
+            "  require(\"fs\").writeFileSync(%s, \"x\");\n"
+            "  setTimeout(() => {}, 8000);\n"
+            "}\n" % (json.dumps(real_copy), json.dumps(marker)))
+    p = PtyPicker(home)
+    end = time.monotonic() + 10
+    while not os.path.exists(marker) and time.monotonic() < end:
+        time.sleep(0.02)
+    in_window = os.path.exists(marker)
+    cooked_at_send = p.termios_restored()
+    p.send(b"\x03")
+    got = p.read_until(b"cancelled", 10)
+    code = exit_code(p.wait(5))
+    p.drain()
+    noisy = b"KeyboardInterrupt" in p.buf or b"Traceback" in p.buf
+    clean = (in_window and cooked_at_send and b"cancelled" in got
+             and code == 4 and not noisy and p.termios_restored())
+    evidence("P13-sigint-launch", "ok" if clean else "FINDING",
+             "first-preview-in-flight=%s cooked-at-send=%s cancelled=%s exit=%s "
+             "traceback=%s" % (in_window, cooked_at_send, b"cancelled" in got,
+                               code, noisy))
+    p.kill_close()
+
     # ---- N15: the INSTALLED layout, resolving with no STATUSLINE_JS to lean on.
     # Every other case here runs the picker from the repo tree with the override
     # set by child_env, so between them they exercise the one branch of renderer
@@ -865,6 +938,45 @@ def main():
              % (out.returncode, "renderer not found" in txt))
     if not f5:
         lab_error("F5", "resolution comparator blind")
+
+    # F6 flips the P11/P12 comparator. The known-bad is the current picker
+    # with its signal guard taken out -- built from the live source rather
+    # than from history, because a history-based baseline stops being a
+    # known-bad the moment the fix merges. The anchor must occur exactly once:
+    # a refactor that moves the guard has to break this arm loudly instead of
+    # letting it pass while measuring nothing.
+    guard_call = (
+        "        on_signal_exit = guard_terminal_against_signals(\n"
+        "            sys.stdin.fileno(), args.config)\n")
+    src = open(PICKER, encoding="utf-8").read()
+    if src.count(guard_call) != 1:
+        evidence("F6-signal-guard-flip", "LAB-DEAD",
+                 "guard anchor found %d times, expected exactly 1"
+                 % src.count(guard_call))
+        lab_error("F6", "signal guard anchor moved; the control cannot be built")
+    else:
+        mutant_dir = os.path.join(LAB, "f6-mutant")
+        shutil.rmtree(mutant_dir, ignore_errors=True)
+        os.makedirs(mutant_dir)
+        mutant = os.path.join(mutant_dir, "statusline_picker.py")
+        with open(mutant, "w", encoding="utf-8") as fh:
+            fh.write(src.replace(guard_call, "        on_signal_exit = []\n"))
+        home = make_home("f6")
+        p = PtyPicker(home, picker=mutant)
+        p.read_until(b"statusline picker", 15)
+        p.drain()
+        raw_mid = not p.termios_restored()
+        os.kill(p.pid, signal.SIGTERM)
+        p.wait(5)
+        p.drain()
+        stranded = not p.termios_restored()
+        evidence("F6-signal-guard-flip",
+                 "FLIPPED" if raw_mid and stranded else "LAB-DEAD",
+                 "guard removed: raw-mid-run=%s pane-left-raw-after-SIGTERM=%s"
+                 % (raw_mid, stranded))
+        if not (raw_mid and stranded):
+            lab_error("F6", "signal-restore comparator blind")
+        p.kill_close()
 
     print("---")
     if lab_errors:

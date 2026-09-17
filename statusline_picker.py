@@ -160,6 +160,22 @@ PREVIEW_TIMEOUT = 10
 # window separates the two cases and bounds every mid-sequence read.
 ESC_SETTLE = 0.05
 
+# What the picker changes about the screen while its frames are up, and the
+# sequence that puts it back. Autowrap off: a frame wider than the pane clips
+# at the right edge instead of wrapping the layout into a mangle. Cursor
+# hidden: draw() parks it under the "colors:" line after every frame, where it
+# would sit blinking as if the picker were a prompt. ONE leave sequence,
+# because two paths emit it -- main()'s finally and the signal guard -- and
+# they must not drift. It NORMALIZES rather than round-trips the incoming
+# state: terminfo's own exit capability is a static sequence (cnorm, measured
+# \x1b[?12l\x1b[?25h on xterm-256color) because prior mode state is not
+# portably queryable, so an interactive shell's defaults -- wrap on, cursor
+# visible -- are the exit contract, exactly as curses endwin leaves them. A
+# DECRQM query round-trip would trade that for a blocking read on terminals
+# that never answer it.
+SCREEN_ENTER = "\x1b[?7l\x1b[?25l"
+SCREEN_LEAVE = "\x1b[?7h\x1b[?25h"
+
 # The accent ring 'a' cycles a segment through: None = the scheme's own slot,
 # then the renderer's named override colors (its NAMED table -- the renderer
 # validates specs, so a name here it does not know would be silently dropped
@@ -932,6 +948,73 @@ def enable_vt_output():
         return bool(kernel32.SetConsoleMode(handle, wanted))
     except (AttributeError, OSError, ValueError):
         return False
+
+
+def guard_terminal_against_signals(fd, config_path):
+    """Make SIGINT, SIGTERM and SIGHUP put the pane back before they take
+    effect. POSIX only; call once, before the picker changes anything about
+    the terminal. Returns a list the caller may append zero-argument cleanups
+    to; they run, best effort, on the way out.
+
+    A finally is the wrong tool for these three. SIGTERM and SIGHUP kill a
+    Python process without unwinding it, so no finally runs and the pane's
+    shell inherits raw mode, no autowrap and a hidden cursor. A handler that
+    RAISES so the finally blocks do run is not enough either: the exception
+    lands wherever the main thread happens to be, and when that is inside a
+    restoring finally the rest of that block is abandoned. So the handler
+    does the whole restore itself and depends on nothing after it.
+
+    SIGINT is the documented cancel key arriving as a signal, which is how a
+    terminal delivers Ctrl-C until the reader reaches raw mode. It ends the
+    run as a cancel -- exit 4, nothing written -- instead of a traceback and a
+    signal death. SIGTERM and SIGHUP are re-delivered under the default
+    disposition once the pane is back, so a caller's wait status is exactly
+    what it was before this guard existed; only the pane differs.
+
+    The restore writes to the descriptor, never to sys.stdout: a handler can
+    interrupt a buffered write, and re-entering that object raises. It uses
+    TCSANOW because TCSADRAIN waits for pending output, and on SIGHUP the
+    terminal may be gone, where that wait never ends. Every step tolerates
+    failure for the same reason. SIGKILL and SIGSTOP cannot be caught, so a
+    pane can still be stranded by those; nothing here claims otherwise."""
+    import signal
+    import termios
+
+    saved = termios.tcgetattr(fd)
+    armed = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    cleanups = []
+
+    def handler(signum, _frame):
+        # one restore per run: a second signal must not interrupt this one
+        for sig in armed:
+            signal.signal(sig, signal.SIG_IGN)
+        try:
+            termios.tcsetattr(fd, termios.TCSANOW, saved)
+        except (termios.error, OSError):
+            pass
+        leave = SCREEN_LEAVE
+        if signum == signal.SIGINT:
+            leave += "\x1b[2J\x1b[Hcancelled -- %s untouched\n" % config_path
+        try:
+            os.write(1, leave.encode("utf-8", "replace"))
+        except OSError:
+            pass
+        for cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception:  # a cleanup must never keep the process alive
+                pass
+        if signum == signal.SIGINT:
+            # SystemExit, not os._exit: unwinding is what kills a renderer
+            # child still in flight (subprocess.run does it on any exception).
+            # Nothing the unwinding skips matters now -- the pane is back.
+            sys.exit(4)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in armed:
+        signal.signal(sig, handler)
+    return cleanups
 
 
 def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
@@ -1830,6 +1913,9 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
+    # cleanups for the signal guard to run; stays empty where none is armed
+    on_signal_exit = []
+
     # Probed here rather than left to the lazy import in read_keys_tty: an
     # ImportError there escapes main() and Python exits 1, which this tool
     # documents as "selftest failures -- a real defect, do not retry". A
@@ -1862,6 +1948,14 @@ def main():
         def make_keys():
             return read_keys_tty(sys.stdin)
 
+        # Armed here, before the first renderer call, because the launch
+        # window is where Ctrl-C still arrives as a signal. This branch only:
+        # the Windows console path changes no input mode, its reader already
+        # folds Ctrl-C into the cancel token, and none of this could be
+        # driven there.
+        on_signal_exit = guard_terminal_against_signals(
+            sys.stdin.fileno(), args.config)
+
     try:
         registry = fetch_registry(node, args.js)
     except RuntimeError as exc:
@@ -1887,6 +1981,9 @@ def main():
     except (OSError, ValueError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         sys.exit(2)
+    if sandbox:
+        on_signal_exit.append(
+            lambda: shutil.rmtree(sandbox, ignore_errors=True))
 
     def previewer(st):
         # only the rendering stays here; which bytes and which label is
@@ -1901,24 +1998,20 @@ def main():
         sys.stdout.write(s)
         sys.stdout.flush()
 
-    # autowrap off while frames are on screen: a frame wider than the pane
-    # clips at the right edge instead of wrapping the layout into a mangle.
-    # cursor hidden for the same tenancy: draw() parks it under the "colors:"
-    # line after every frame, where it sits blinking as if the picker were a
-    # prompt. Both are restored in the same finally, so no exit path -- save,
-    # cancel, handoff, or a raise -- leaves the pane's shell without them.
-    # The restore NORMALIZES rather than round-trips the incoming state:
-    # terminfo's own exit capability is a static sequence (cnorm, measured
-    # \x1b[?12l\x1b[?25h on xterm-256color) because prior mode state is not
-    # portably queryable, so an interactive shell's defaults -- wrap on,
-    # cursor visible -- are the exit contract here, exactly as curses endwin
-    # leaves them. A DECRQM query round-trip would trade that for a blocking
-    # read on terminals that never answer it.
-    write_flush("\x1b[?7l\x1b[?25l")
+    # SCREEN_ENTER / SCREEN_LEAVE say what changes and why. The finally covers
+    # every exit that UNWINDS -- save, cancel, handoff, a raise; the exits
+    # that do not unwind are guard_terminal_against_signals' business.
+    # close() runs the reader's own finally -- the termios restore -- here and
+    # now. Left to collection it ran when the generator's last reference
+    # died, which is prompt under CPython's refcounting and unspecified
+    # anywhere else.
+    keys = make_keys()
+    write_flush(SCREEN_ENTER)
     try:
-        outcome = run_picker(state, make_keys(), previewer, write_flush)
+        outcome = run_picker(state, keys, previewer, write_flush)
     finally:
-        write_flush("\x1b[?7h\x1b[?25h")
+        keys.close()
+        write_flush(SCREEN_LEAVE)
         if sandbox:
             shutil.rmtree(sandbox, ignore_errors=True)
     sys.stdout.write("\x1b[2J\x1b[H")
