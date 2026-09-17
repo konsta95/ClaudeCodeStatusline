@@ -271,7 +271,12 @@ asking every user to rediscover them in their own render script:
   (autowrap must be off during frames or the menu shreds).
 - Config saves need unique-tempfile-plus-rename. A fixed temp name corrupts reads under two
   concurrent writers.
-- The terminal must be restored on **every** exit path, `Ctrl-C` included.
+- The terminal must be restored on **every** exit path, and a `finally` only covers the ones
+  that unwind. `SIGTERM` and `SIGHUP` kill a Python process without unwinding it, so a handler
+  puts the pane back itself and then re-delivers the signal, leaving the caller's wait status
+  as it was. `Ctrl-C` typed before the reader reaches raw mode arrives as `SIGINT` rather than
+  as a byte, and is folded into the same cancel. Only an uncatchable `SIGKILL` can still strand
+  a pane.
 
 ## The pty regression lab
 
