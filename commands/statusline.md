@@ -319,5 +319,7 @@ python3 "$HOME/ClaudeCodeStatusline/statusline_picker.py"
 - Every save goes through `--apply` (or the pane's interactive save) — both validate against
   the registry and write atomically. Hand-writing `statusline-config.json` bypasses both and
   is never the answer to an `--apply` refusal.
-- Delete `~/.claude/statusline-config.json` to restore all components in default order.
+- Delete `~/.claude/statusline-config.json` to restore the default selection. That is every
+  component `node statusline.js --segments` marks `default`, in registry order; the opt-in
+  ones stay off.
 - An empty selection is a valid explicit choice — an empty bar, not an error.

@@ -289,8 +289,9 @@ function versionSeg(running, pal) {
 // ── Segment registry + selection config ─────────────────────────────────────
 // Mirrors Codex's status_line model (codex-rs/tui/src/bottom_pane/status_line_setup.rs,
 // read 2026-08-25): the items array is the selection AND the render order; an unknown id is
-// skipped, a duplicate is dropped, and a missing or broken file means all segments in default
-// order. An empty items array is a deliberate choice (an empty line), not an error state.
+// skipped, a duplicate is dropped, and a missing or broken file means the default segments
+// (DEFAULT_IDS below) in registry order. An empty items array is a deliberate choice (an
+// empty line), not an error state.
 // STATUSLINE_CONFIG overrides the path: the picker previews a candidate config through THIS
 // same renderer, so a preview cannot drift away from the real line.
 // Third column: colorable — whether item_colors may override the segment's
@@ -347,9 +348,13 @@ function loadConfig() {
 
 // The picker's only id source — no copy of the registry exists anywhere else.
 // colorable rides along so the picker knows where its accent submode applies.
+// default rides along for the same single-carrier reason: what a missing config
+// means is decided HERE (DEFAULT_IDS), and a picker holding its own opinion
+// would save a different bar than the one this file was already drawing.
 if (process.argv.includes('--segments')) {
-  process.stdout.write(JSON.stringify(
-    SEGMENTS.map((s) => ({ id: s[0], label: s[1], colorable: s[2] }))));
+  process.stdout.write(JSON.stringify(SEGMENTS.map((s) => ({
+    id: s[0], label: s[1], colorable: s[2], default: DEFAULT_IDS.includes(s[0]),
+  }))));
   process.exit(0);
 }
 
