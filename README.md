@@ -1,5 +1,7 @@
 # ClaudeCodeStatusline
 
+[![selftest](https://github.com/konsta95/ClaudeCodeStatusline/actions/workflows/selftest.yml/badge.svg?branch=main)](https://github.com/konsta95/ClaudeCodeStatusline/actions/workflows/selftest.yml)
+
 An interactive status line picker for [Claude Code](https://github.com/anthropics/claude-code) —
 customize what your status line shows: toggle components on and off, reorder them, pick a
 colour scheme and per-component accent colours, and see a live preview of the assembled bar
@@ -45,15 +47,20 @@ compromise.
 ## Install
 
 Requires Node.js 12.5 or newer and Python 3.7 or newer — the floors set by the language
-features the two files use. The built-in checks have been run on Python 3.11 through 3.14 and
-on Node 22; older versions inside those floors are expected to work and have not been
-exercised. No dependencies, no build step, no network access.
+features the two files use. A GitHub Actions workflow runs the built-in checks on every pull
+request and every push to `main`: on Linux, macOS and Windows with Python 3.8 and 3.14 on
+Node 22, and on the two floors themselves, Python 3.7 with Node 12.5, on Linux. Versions in
+between are expected to work and are not exercised. No dependencies, no build step, no network
+access.
 
 **Platforms.** The interactive TUI runs on Linux and macOS through a POSIX terminal
 (`termios` raw mode) and natively on Windows 10+ through the console API (`msvcrt` key
 reads, VT output). The Windows reader speaks the same key-token language as the tty reader
 and the mapping is pinned by the built-in checks on every platform — though it has not yet
-been driven on a physical Windows console, so run `--selftest` there first. A console that
+been driven on a physical Windows console, so run `--selftest` there first. The hosted
+Windows and macOS runs cover the built-in checks and `--show`. On macOS that includes the key
+reader on a real pty; on Windows the pty checks are skipped, because there is no pty. Neither
+run drives the interactive picker. A console that
 cannot do ANSI, or a platform with neither API, gets a clean exit `2` saying so rather than
 a traceback. `--show`, `--selftest`, `--apply`, `--colors` and `--scheme` run anywhere, which is what
 makes the `/statusline` command's default AskUserQuestion path platform-independent:
@@ -329,6 +336,11 @@ concurrent saves, narrow terminals, and teardown. Each case prints one `EVIDENCE
 run exits `0` only when every case holds and every comparator has been seen flipping on its
 known-bad input. A single `FINDING` exits `1`, because the lines are for a reader and the exit
 code is for a caller.
+
+The workflow gates on two of the four labs, the exit-code contract and the failed-save probe,
+on Linux. This lab and the carrier lab stay out of it on purpose. They lean on timing windows
+that have been observed on one machine only, and a red mark that comes and goes is worse than
+no mark.
 
 ```bash
 python3 lab/picker_lab.py
