@@ -20,10 +20,11 @@ Config file (``~/.claude/statusline-config.json``)::
     {"items": ["model", "context", ...], "colors": true,
      "scheme": "codex", "item_colors": {"branch": "#87afff"}}
 
-Absent file = all segments in default order. Unknown ids are skipped,
-duplicates dropped, a broken file falls back to the default -- the renderer
-and this tool implement the same forgiving parse. Delete the file to restore
-defaults. Scheme names come from ``node statusline.js --schemes`` (the
+Absent file = the renderer's own default selection, which this tool reads from
+the same ``--segments`` answer instead of deciding for itself. Unknown ids are
+skipped, duplicates dropped, a broken file falls back to that default -- the
+renderer and this tool implement the same forgiving parse. Delete the file to
+restore defaults. Scheme names come from ``node statusline.js --schemes`` (the
 renderer is the only carrier of those too); ``item_colors`` overrides one
 segment's identity accent with a named ansi color or ``#RRGGBB`` hex --
 the picker's accent key cycles the names, hex stays config-file-only, and
@@ -218,9 +219,12 @@ def fetch_registry(node, js):
         entries = json.loads(out.stdout.decode("utf-8", "replace"))
         # colorable is absent from older renderers; default False so the
         # accent submode stays off rather than painting segments the
-        # renderer would ignore.
+        # renderer would ignore. default is absent from renderers that do not
+        # publish it; those read as True, the rule that held before any
+        # segment was opt-in.
         registry = [
-            (str(e["id"]), str(e["label"]), bool(e.get("colorable")))
+            (str(e["id"]), str(e["label"]), bool(e.get("colorable")),
+             bool(e.get("default", True)))
             for e in entries
         ]
     except (ValueError, TypeError, KeyError, AttributeError):
@@ -303,6 +307,16 @@ def normalize(items, known_ids):
     return result
 
 
+def default_ids(registry):
+    """The selection the RENDERER falls back to with no usable config, in
+    registry order. The picker must fall back to exactly this: a save that
+    names no items (--colors, --scheme, Enter on an untouched list) writes the
+    fallback to disk, so a second opinion here would change a bar the user
+    never touched. Rows shorter than four fields -- fixtures, renderers that
+    do not publish the flag -- count as default."""
+    return [e[0] for e in registry if len(e) < 4 or e[3]]
+
+
 def parse_apply_items(raw, known_ids):
     """Strict parse of an --apply selection over the live registry.
 
@@ -327,10 +341,12 @@ def parse_apply_items(raw, known_ids):
     return items
 
 
-def load_config(path, known_ids, known_schemes=("codex",)):
+def load_config(path, known_ids, known_schemes=("codex",), fallback_ids=None):
     """(items, colors, scheme, item_colors) with the renderer's fallback:
-    absent/broken file or a non-list items key = all known ids; colors
-    defaults True; an unknown scheme falls back to the first known one;
+    absent/broken file or a non-list items key = fallback_ids, which callers
+    take from default_ids(registry) so the fallback stays the renderer's
+    decision (None = every known id, for a caller with no registry to ask);
+    colors defaults True; an unknown scheme falls back to the first known one;
     item_colors keeps only str->str entries but preserves their VALUES
     opaquely (a hex spec the picker cannot cycle must still round-trip a
     save untouched -- the renderer is the one that judges specs).
@@ -342,7 +358,8 @@ def load_config(path, known_ids, known_schemes=("codex",)):
     scheme as codex at render time, so the value heals when the pair stops
     skewing."""
     fallback_scheme = known_schemes[0] if known_schemes else "codex"
-    default = (list(known_ids), True, fallback_scheme, {})
+    fallback_items = list(known_ids if fallback_ids is None else fallback_ids)
+    default = (list(fallback_items), True, fallback_scheme, {})
     try:
         with open(path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
@@ -354,7 +371,7 @@ def load_config(path, known_ids, known_schemes=("codex",)):
     items = (
         normalize(raw_items, known_ids)
         if isinstance(raw_items, list)
-        else list(known_ids)
+        else list(fallback_items)
     )
     scheme = cfg.get("scheme")
     if not isinstance(scheme, str):
@@ -611,7 +628,8 @@ class PickerState:
     def __init__(self, registry, enabled_ids, colors,
                  scheme="codex", item_colors=None, schemes=("codex",)):
         # registry rows may be (id, label) -- older fixtures/renderers -- or
-        # (id, label, colorable); colorable defaults False.
+        # carry colorable and default after it; colorable defaults False, and
+        # default is load_config's business, not this state's.
         self.labels = {e[0]: e[1] for e in registry}
         self.canonical = [e[0] for e in registry]
         self.colorable = {e[0] for e in registry if len(e) > 2 and e[2]}
@@ -922,7 +940,8 @@ def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
     registry = fetch_registry(node, js)
     known = [e[0] for e in registry]
     schemes = fetch_schemes_or_none(node, js)
-    items, colors, scheme, item_colors = load_config(cfg_path, known, schemes)
+    items, colors, scheme, item_colors = load_config(
+        cfg_path, known, schemes, fallback_ids=default_ids(registry))
     write("config: %s%s\n" % (cfg_path, "" if os.path.exists(cfg_path) else " (absent -> defaults)"))
     for entry in registry:
         rid, label = entry[0], entry[1]
@@ -1021,11 +1040,26 @@ def selftest():
         # load: absent -> all + colors on + first scheme + no overrides
         check("load absent -> defaults",
               load_config(cfg, known) == (known, True, "codex", {}))
+        # the fallback belongs to the caller, who takes it from the renderer:
+        # an absent file lands on it rather than on every known id
+        check("load absent -> the handed-over fallback, not every known id",
+              load_config(cfg, known, fallback_ids=["a", "c"])
+              == (["a", "c"], True, "codex", {}))
+        check("default ids: the flag decides, short rows count as default",
+              default_ids([("a", "A", True, True), ("b", "B", True, False),
+                           ("c", "C")]) == ["a", "c"])
         # load: broken -> defaults
         with open(cfg, "w") as fh:
             fh.write("not json")
         check("load broken -> defaults",
               load_config(cfg, known) == (known, True, "codex", {}))
+        # load: a config whose items key is not a list keeps its other keys
+        # and takes the same fallback for items
+        with open(cfg, "w") as fh:
+            json.dump({"items": "model", "colors": False}, fh)
+        check("load non-list items -> the handed-over fallback, colors kept",
+              load_config(cfg, known, fallback_ids=["a", "c"])
+              == (["a", "c"], False, "codex", {}))
         # load: empty items honored, colors false parsed
         with open(cfg, "w") as fh:
             json.dump({"items": [], "colors": False}, fh)
@@ -1383,6 +1417,37 @@ def selftest():
                       and load_config(e2e_cfg, [e[0] for e in reg])
                       == (first_two, True, "codex", {}))
 
+                # Fresh install: no config exists yet, and the first save may
+                # name no items at all (--colors, --scheme, Enter in the TUI
+                # on an untouched list). That save must write the bar the
+                # renderer was already drawing: what no-config means is ONE
+                # decision and the renderer owns it. Known-bad by
+                # construction: a picker that falls back to every known id
+                # saves the opt-in segments too, and the two bars differ.
+                fresh_cfg = os.path.join(td, "fresh-cfg.json")
+                fresh = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__),
+                     "--colors", "on", "--config", fresh_cfg,
+                     "--js", DEFAULT_JS],
+                    capture_output=True, text=True)
+
+                def _bar(config_path):
+                    bar_env = dict(os.environ)
+                    bar_env.pop("STATUSLINE_PAYLOAD_DUMP", None)
+                    bar_env["HOME"] = td
+                    bar_env["STATUSLINE_CONFIG"] = config_path
+                    return subprocess.run(
+                        [node, DEFAULT_JS],
+                        input=json.dumps(FIXTURE_PAYLOAD).encode("utf-8"),
+                        capture_output=True, env=bar_env,
+                        timeout=PREVIEW_TIMEOUT).stdout
+
+                bare = _bar(os.path.join(td, "no-such-config.json"))
+                check("fresh install: a save naming no items keeps the bar "
+                      "the renderer already draws",
+                      fresh.returncode == 0 and bool(bare)
+                      and _bar(fresh_cfg) == bare)
+
                 # Renderer skew: a renderer that answers --segments but not
                 # --schemes (an older statusline.js beside a newer picker)
                 # must degrade, not brick. Contract: implicit paths proceed
@@ -1727,7 +1792,8 @@ def main():
             # a plain --apply/--colors must survive renderer skew, and
             # load_config(None) preserves the stored scheme verbatim
             schemes, schemes_err = None, exc
-        items, colors, scheme, item_colors = load_config(args.config, known, schemes)
+        items, colors, scheme, item_colors = load_config(
+            args.config, known, schemes, fallback_ids=default_ids(registry))
         if args.apply is not None:
             try:
                 items = parse_apply_items(args.apply, known)
@@ -1803,7 +1869,8 @@ def main():
         sys.exit(2)
     known = [e[0] for e in registry]
     schemes = fetch_schemes_or_none(node, args.js)
-    items, colors, scheme, item_colors = load_config(args.config, known, schemes)
+    items, colors, scheme, item_colors = load_config(
+        args.config, known, schemes, fallback_ids=default_ids(registry))
     # Degrade ring is (scheme,), not ("codex",): PickerState normalizes a
     # scheme outside its ring to the ring's first entry, so a codex ring would
     # rewrite a preserved stored scheme on the next save -- measured

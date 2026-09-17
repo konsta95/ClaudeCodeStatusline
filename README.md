@@ -184,7 +184,8 @@ running `node statusline.js --segments`. There is no second copy to drift.
 
 `directory`, `branch` and `github` are the fused `git-branch` component split into standalone
 pieces for people who want them separated or differently coloured; they are off by default, so
-a bar with no config file renders exactly as it always has.
+a bar with no config file renders exactly as it always has. Saving from the picker without
+touching the list keeps them off too.
 
 A component that has no data is omitted rather than rendered empty. Colour is one three-step
 pressure scale — green under 50%, yellow under 75%, red at or above — applied to context,
@@ -220,7 +221,10 @@ The semantics are modelled on Codex's `status_line_setup.rs`, and they are the w
 1. `items` is both the **selection and the render order**.
 2. An unknown id is skipped.
 3. A duplicate id is dropped.
-4. A missing or unparseable file falls back to all components in default order.
+4. A missing or unparseable file falls back to the default selection in registry order.
+   The renderer owns that selection and reports it: `node statusline.js --segments` marks
+   each component `default` or not, and the picker takes its own fallback from there, so a
+   save that names no items writes the bar you were already looking at.
 5. An empty `items` array is a valid explicit choice — an empty bar, not an error.
 6. `scheme` names the palette; an unknown or missing name falls back to `codex`, so an old
    config keeps rendering the bar it always rendered.
