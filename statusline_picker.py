@@ -71,6 +71,29 @@ the config on disk has no one to ask, so unknown ids there are skipped,
 but --apply is an explicit instruction, and silently repairing it would
 write a bar the caller did not ask for. Same reasoning as --payload:
 explicit input fails loudly, defaults degrade gracefully.
+
+Launch-window key guard (in ``--selftest``). WHY THIS EXISTS: the TTY reader
+enters raw mode with TCSADRAIN so a key typed while the first preview renders
+is kept, not flushed; ``tty.setraw``'s default ``when`` is TCSAFLUSH, which
+discards it, so the regression is one dropped argument away. Writing a key to
+the pty just before raw entry does not test that: a byte the line discipline
+has not ingested yet survives TCSAFLUSH too (measured 2026-09-16: kept in 20
+of 50 trials), so such a check reads green against the exact regression it
+exists for. The guard types ``q`` -- the quit binding, the key the launch
+window actually lost -- and waits for its echo on the master before raw entry:
+a fresh pty is ICANON|ECHO, so the echo is proof of ingestion.
+
+CONTRACT. Two arms on real ptys, both behind that echo barrier: the reader
+itself must still yield quit for the ingested key (the guard), and TCSAFLUSH
+on an identical fixture must drop it (the known-bad arm, asserting the
+hazard's shape). If the byte ever survives TCSAFLUSH the arms no longer
+discriminate, and that is a failure, never a vacuous pass; an echo that never
+arrives fails its arm, never skips it. A green covers the kernel line
+discipline of the host pty only: it says nothing about keys a terminal
+emulator or tmux still holds before writing them to the pty, nor about the
+Windows reader, which has no raw-mode entry. Without os.openpty the whole pty
+block is skipped and reports nothing about the primitive; the closing receipt
+``statusline_picker selftest: N/M passed`` counts only the checks that ran.
 """
 
 import argparse
@@ -936,8 +959,10 @@ def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
 
 def selftest():
     failures = []
+    ran = []
 
     def check(name, cond):
+        ran.append(name)
         print("%s: %s" % ("PASS" if cond else "FAIL", name))
         if not cond:
             failures.append(name)
@@ -1497,6 +1522,65 @@ def selftest():
             os.close(master)
             os.close(slave)
         check("pty reader: termios restored on close", restored)
+
+        # Launch-window guard. The byte must be INGESTED before raw entry, and
+        # its echo on the master is the proof: a byte still in flight to the
+        # line discipline survives TCSAFLUSH as well, and the guard would then
+        # read green against the regression it exists for. Each arm gets its
+        # own watchdog so a blocked arm is attributed to itself and cannot cut
+        # the other short; every path through an arm checks its name once.
+        import select as _select
+        import tty as _tty
+
+        launch_key = b"q"  # the quit binding: the key the launch window lost
+        barrier_timeout = 2.0
+        drop_window = 0.5
+        arm_watchdog = 5
+
+        def _ingested(master_fd):
+            os.write(master_fd, launch_key)
+            ready, _, _ = _select.select([master_fd], [], [], barrier_timeout)
+            return bool(ready) and os.read(master_fd, 1) == launch_key
+
+        def _reader_keeps(slave_fd):
+            keys = read_keys_tty(_FdStdin(slave_fd))
+            try:
+                return next(keys, None) == "quit"
+            finally:
+                keys.close()
+
+        def _flush_drops(slave_fd):
+            _tty.setraw(slave_fd, _termios.TCSAFLUSH)
+            ready, _, _ = _select.select([slave_fd], [], [], drop_window)
+            return not ready
+
+        def _launch_window_arm(name, observe):
+            fds = []
+            detail = ""
+            verdict = False
+            old = signal.signal(signal.SIGALRM, _alarm)
+            signal.alarm(arm_watchdog)
+            try:
+                fds.extend(os.openpty())
+                if _ingested(fds[0]):
+                    verdict = observe(fds[1])
+                else:
+                    detail = " -- echo barrier timed out"
+            except TimeoutError:
+                verdict, detail = False, " -- blocked past the watchdog"
+            except OSError as exc:
+                verdict, detail = False, " -- pty fixture failed: %s" % exc
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old)
+                for fd in fds:
+                    os.close(fd)
+            check(name + ("" if verdict else detail), verdict)
+
+        _launch_window_arm("pty reader: launch-window key survives raw entry",
+                           _reader_keeps)
+        _launch_window_arm("pty fixture: TCSAFLUSH drops the pre-typed byte "
+                           "(arms discriminate)", _flush_drops)
     else:
         print("SKIP: pty reader checks (no os.openpty)")
 
@@ -1565,6 +1649,7 @@ def selftest():
 
     print("---")
     print("SELFTEST %s (%d failures)" % ("PASSED" if not failures else "FAILED", len(failures)))
+    print("statusline_picker selftest: %d/%d passed" % (len(ran) - len(failures), len(ran)))
     return 0 if not failures else 1
 
 
