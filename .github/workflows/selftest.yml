@@ -35,8 +35,23 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      # -u so that a run which hangs still shows the last check it finished
       - name: Built-in checks
-        run: python statusline_picker.py --selftest
+        if: runner.os != 'macOS'
+        run: python -u statusline_picker.py --selftest
+      # DIAGNOSTIC, temporary: the first macOS run sat in this step until the job cap and
+      # printed nothing. SIGABRT under PYTHONFAULTHANDLER prints the blocked line.
+      - name: Built-in checks, abort with a traceback if they hang
+        if: runner.os == 'macOS'
+        timeout-minutes: 4
+        run: |
+          PYTHONFAULTHANDLER=1 python -u statusline_picker.py --selftest &
+          pid=$!
+          ( sleep 90; kill -ABRT "$pid" ) >/dev/null 2>&1 &
+          dog=$!
+          rc=0; wait "$pid" || rc=$?
+          kill "$dog" 2>/dev/null || true
+          exit "$rc"
       - name: Preview through the real renderer, no TTY
         run: python statusline_picker.py --show
 
@@ -55,7 +70,7 @@ jobs:
         with:
           node-version: "12.5.0"
       - name: Built-in checks
-        run: python statusline_picker.py --selftest
+        run: python -u statusline_picker.py --selftest
 
   labs:
     name: labs, exit contract and failed save
