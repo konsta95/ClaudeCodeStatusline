@@ -34,8 +34,8 @@ tags and on the GitHub releases rather than here. Numbers in parentheses are pul
 
 - The picker fell back to every known component when no config existed, so a save that named
   no items wrote the opt-in components into a bar the user had not touched (#17).
-- `SIGTERM` and `SIGHUP` left the terminal in raw mode with autowrap off and the cursor hidden.
-  The pane is now restored before the signal takes effect (#18).
+- `SIGTERM`, `SIGHUP` and `SIGQUIT` left the terminal in raw mode with autowrap off and the
+  cursor hidden. The pane is now restored before the signal takes effect (#18, #22).
 - `Ctrl-C` pressed before the reader reached raw mode ended in a traceback. It is a cancel,
   exit `4` (#18).
 - `STATUSLINE_PAYLOAD_DUMP=0` switched the probe on and wrote the payload into a file named
@@ -49,7 +49,9 @@ tags and on the GitHub releases rather than here. Numbers in parentheses are pul
 - The renderer was not found from the installed layout, `~/.claude/tools/` with the renderer
   one level up (#13).
 - `--scheme` alone reported nothing about the scheme while colours were off, and a missing
-  renderer was reported by its first candidate path only (#20).
+  renderer was reported by its first candidate path only (#20). `--show` names the saved
+  scheme too (#22).
+- The renderer error line ignored `NO_COLOR` and `"colors": false` (#22).
 
 ## 0.1.0
 

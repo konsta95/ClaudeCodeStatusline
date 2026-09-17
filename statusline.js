@@ -399,6 +399,9 @@ let raw = '';
 process.stdin.on('data', (c) => { raw += c; });
 process.stdin.on('end', () => {
   let out = '';
+  // Loaded before anything below can throw, so the error line obeys the same colour
+  // switch as the bar. loadConfig itself never throws: every failure in it is a fallback.
+  const cfg = loadConfig();
   try {
     // A PowerShell 5.1 pipe may prepend a UTF-8 BOM — strip it before parsing
     if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
@@ -436,7 +439,6 @@ process.stdin.on('end', () => {
     const modelId = (input.model && input.model.id) || '';
     const modelName = (input.model && input.model.display_name) || modelId || '?';
 
-    const cfg = loadConfig();
     const pal = SCHEMES[cfg.scheme];
     // Identity accents honor per-item overrides; pressure/freshness never do.
     const accent = (id, slot) => cfg.itemColors[id] || slot;
@@ -517,15 +519,15 @@ process.stdin.on('end', () => {
       if (seg) parts.push(seg);
     }
     out = parts.join(paint(pal.sep, '|'));
-    // NO_COLOR (no-color.org): present and non-empty means no colour, whatever the
-    // config says; empty is the same as unset.
-    if (!cfg.colors || process.env.NO_COLOR) out = out.replace(/\x1b\[[0-9;]*m/g, '');
   } catch (e) {
     // Never leave the bar blank: a named error is debuggable, an empty line is not.
     // The message can quote the payload (JSON.parse does), so it is cleaned like
     // every other outside string.
     out = C.dim + 'statusline error: ' + clean(e.message) + C.reset;
   }
+  // NO_COLOR (no-color.org): present and non-empty means no colour, whatever the config
+  // says; empty is the same as unset. Applied out here so it covers the error line too.
+  if (!cfg.colors || process.env.NO_COLOR) out = out.replace(/\x1b\[[0-9;]*m/g, '');
   process.stdout.write(out);
 });
 

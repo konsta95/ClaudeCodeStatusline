@@ -966,8 +966,8 @@ def enable_vt_output():
 
 
 def guard_terminal_against_signals(fd, config_path):
-    """Make SIGINT, SIGTERM and SIGHUP put the pane back before they take
-    effect. POSIX only; call once, before the picker changes anything about
+    """Make SIGINT, SIGQUIT, SIGTERM and SIGHUP put the pane back before they
+    take effect. POSIX only; call once, before the picker changes anything about
     the terminal. Returns a list the caller may append zero-argument cleanups
     to; they run, best effort, on the way out.
 
@@ -982,21 +982,24 @@ def guard_terminal_against_signals(fd, config_path):
     SIGINT is the documented cancel key arriving as a signal, which is how a
     terminal delivers Ctrl-C until the reader reaches raw mode. It ends the
     run as a cancel -- exit 4, nothing written -- instead of a traceback and a
-    signal death. SIGTERM and SIGHUP are re-delivered under the default
-    disposition once the pane is back, so a caller's wait status is exactly
-    what it was before this guard existed; only the pane differs.
+    signal death. SIGQUIT, SIGTERM and SIGHUP are re-delivered under the
+    default disposition once the pane is back, so a caller's wait status is
+    exactly what it was before this guard existed; only the pane differs.
+    SIGQUIT is on the list because Ctrl-\\ is as reachable as Ctrl-C in the
+    launch window, where the terminal still turns both into signals.
 
     The restore writes to the descriptor, never to sys.stdout: a handler can
     interrupt a buffered write, and re-entering that object raises. It uses
     TCSANOW because TCSADRAIN waits for pending output, and on SIGHUP the
     terminal may be gone, where that wait never ends. Every step tolerates
-    failure for the same reason. SIGKILL and SIGSTOP cannot be caught, so a
-    pane can still be stranded by those; nothing here claims otherwise."""
+    failure for the same reason. These four are the ones a terminal or a
+    caller actually sends. Any other signal can still strand a pane, SIGKILL
+    above all because it cannot be caught; nothing here claims otherwise."""
     import signal
     import termios
 
     saved = termios.tcgetattr(fd)
-    armed = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    armed = (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM, signal.SIGHUP)
     cleanups = []
 
     def handler(signum, _frame):
@@ -1048,7 +1051,7 @@ def show(node, js, cfg_path, probe_path, write, explicit_payload=False):
         accent = item_colors.get(rid)
         tag = (" [%s]" % accent) if accent else ""
         write(" [%s] %-2s %-16s %s%s\n" % (mark, pos, rid, label, tag))
-    write("colors: %s\n" % (("on (%s)" % scheme) if colors else "off"))
+    write("colors: %s\n" % colors_report(colors, scheme))
     payload, sandbox, live, mtime = pick_payload(probe_path, explicit=explicit_payload)
     try:
         preview = render_preview(node, js, items, colors, payload, sandbox,
@@ -1635,10 +1638,33 @@ def selftest():
                     _payload(cwd=123),
                     {"items": ["git-branch", "model", "context"], "colors": False},
                 ).stdout.decode("utf-8", "replace")
-                check("bad field: the segment is marked, the rest still renders",
+                check("a builder that throws: that segment is marked, the rest renders",
                       "statusline error" not in bad_field
                       and bad_field.startswith("git-branch!|")
                       and "Fable5" in bad_field and "83K/1M" in bad_field)
+
+                # the error line is part of the bar, so NO_COLOR and
+                # colors:false reach it too
+                unparseable = subprocess.run(
+                    [node, DEFAULT_JS], input=b"not json", capture_output=True,
+                    env=dict(os.environ, NO_COLOR="1", HOME=td,
+                             STATUSLINE_CONFIG=os.path.join(td, "no-such.json")),
+                    timeout=PREVIEW_TIMEOUT).stdout
+                check("error line: NO_COLOR strips it like the rest of the bar",
+                      unparseable.startswith(b"statusline error:")
+                      and b"\x1b" not in unparseable)
+
+                # --show is the confirm step of the slash command, so it has
+                # to name a saved scheme even while colors are off
+                show_cfg = os.path.join(td, "show-cfg.json")
+                save_config(show_cfg, ["model"], False, "mono")
+                shown = subprocess.run(
+                    [sys.executable, os.path.abspath(__file__), "--show",
+                     "--config", show_cfg, "--js", DEFAULT_JS],
+                    capture_output=True, text=True)
+                check("show: names the saved scheme even with colors off",
+                      shown.returncode == 0 and "colors: off" in shown.stdout
+                      and "mono" in shown.stdout)
 
                 # control bytes in a name never reach the terminal
                 hostile = _render(
