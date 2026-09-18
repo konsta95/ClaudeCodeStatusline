@@ -19,6 +19,7 @@ output). MIT licensed.
 
 ## Evidence
 
+- [.github/workflows/selftest.yml](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/.github/workflows/selftest.yml): the hosted run of the built-in checks on Linux, macOS and Windows, on the stated Python 3.7 and Node 12.5 floors, and of the two labs it gates on
 - [lab/picker_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/picker_lab.py): pty regression lab driving the real picker binary under sandboxed HOME directories; exits non-zero on any finding, with the observed-failing pre-fix log kept beside the post-fix log
 - [lab/exit_contract_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/exit_contract_lab.py): pins that environmental failures exit 2 and are never relabelled as picker defects (exit 1)
 - [lab/carrier_lab.py](https://github.com/konsta95/ClaudeCodeStatusline/blob/main/lab/carrier_lab.py): eleven live tmux arms over the pane-and-sentinel handoff, extracted from the shipped slash command rather than retyped

@@ -3,6 +3,30 @@
 Notable changes per release, newest first. Versions are git tags, and the dates live on the
 tags and on the GitHub releases rather than here. Numbers in parentheses are pull requests.
 
+## Unreleased
+
+### Added
+
+- A GitHub Actions workflow that runs the built-in checks on Linux, macOS and Windows with
+  Python 3.8 and 3.14, on the stated floors (Python 3.7, Node 12.5), and gates on the
+  exit-code contract lab and the failed-save probe (#23).
+
+### Fixed
+
+- On Windows a sandboxed child still used the real profile, because only `HOME` was
+  redirected and Windows reads `USERPROFILE`. With a `.claude` directory in the profile,
+  which every Claude Code install has, `--selftest` wrote its fixture payload over the user's
+  own probe file; measured on a hosted Windows runner. Found by the first Windows run (#23).
+- `--selftest` hung on macOS. The pty reader fixture echoed its first key and never read the
+  master, macOS holds raw-mode entry until that echo is read, and the one-shot watchdog was
+  spent by the time the reader's own restore blocked as well. The fixture no longer echoes,
+  the watchdog repeats, and it covers the reader's restore on close. Found by the first
+  macOS run (#23).
+- "termios restored on close" compared terminal settings byte for byte. On macOS the local
+  flags come back with `PENDIN` raised after every raw round trip, typed input or not,
+  measured on a hosted runner; on Linux they come back identical. The check leaves that one
+  bit out, says so in its name, and names the fields that differ when it fails (#23).
+
 ## 0.2.0
 
 ### Added

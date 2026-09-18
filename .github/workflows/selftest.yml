@@ -1,0 +1,97 @@
+# The built-in checks on every system the README names, plus the two labs that are
+# deterministic enough to gate on. The pty lab and the tmux lab stay out on purpose: they
+# lean on timing windows that have only been observed on one machine, and a flaky red mark
+# is worse than no mark. They are one command each to run by hand; see the README.
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  selftest:
+    name: selftest, ${{ matrix.os }}, python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # the oldest release every hosted runner still offers, and the newest
+        python: ["3.8", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # -u so that a run which hangs still shows the last check it finished
+      - name: Built-in checks
+        run: python -u statusline_picker.py --selftest
+      # --show exits 0 even when the renderer failed and says so in brackets, so the exit
+      # code alone cannot fail this step. 83K/1M is computed by the renderer out of the
+      # fixture payload, which is what a runner with no payload probe previews.
+      - name: Preview through the real renderer, no TTY
+        shell: python
+        run: |
+          import subprocess, sys
+          shown = subprocess.run([sys.executable, "statusline_picker.py", "--show"],
+                                 capture_output=True)
+          sys.stdout.buffer.write(shown.stdout + shown.stderr)
+          sys.stdout.flush()
+          preview = [line for line in shown.stdout.splitlines() if line.startswith(b"preview:")]
+          rendered = (shown.returncode == 0 and len(preview) == 1
+                      and b"[preview" not in preview[0] and b"83K/1M" in preview[0])
+          sys.exit(0 if rendered else "the preview line is missing, bracketed, or not the fixture bar")
+
+  floors:
+    # The README states Python 3.7 and Node 12.5 as floors. This job is what makes that a
+    # measurement. Ubuntu 22.04 because it is the newest image that still offers 3.7; when
+    # that image is retired this job goes with it, and the README's floor sentence with it.
+    name: stated floors, python 3.7, node 12.5
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.7"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "12.5.0"
+      - name: Built-in checks
+        run: python -u statusline_picker.py --selftest
+
+  labs:
+    name: labs, exit contract and failed save
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Exit-code contract
+        run: python lab/exit_contract_lab.py
+      - name: A failed save writes nothing
+        run: python lab/save_failure_probe.py

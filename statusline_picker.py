@@ -445,6 +445,15 @@ def colors_report(colors, scheme):
     return "off (scheme %s is saved and applies once colors are on)" % scheme
 
 
+def home_env(env, home):
+    # Node's os.homedir() and Python's expanduser read HOME on POSIX and
+    # USERPROFILE on Windows. Setting one of them redirects nothing on the other
+    # system, and there the child reads and writes the real profile.
+    env["HOME"] = home
+    env["USERPROFILE"] = home
+    return env
+
+
 def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None,
                    scheme="codex", item_colors=None):
     """Render a candidate selection through the REAL renderer. A renderer that
@@ -473,7 +482,7 @@ def render_preview(node, js, items, colors, payload_bytes, sandbox_home=None,
             }, fh)
         env["STATUSLINE_CONFIG"] = cfg_path
         if sandbox_home:
-            env["HOME"] = sandbox_home
+            home_env(env, sandbox_home)
             os.makedirs(os.path.join(sandbox_home, ".claude"), exist_ok=True)
         try:
             out = subprocess.run(
@@ -1094,6 +1103,12 @@ def selftest():
     check("normalize skips unknown + dupes", normalize(["c", "zz", "a", "c"], known) == ["c", "a"])
     check("normalize empty stays empty", normalize([], known) == [])
 
+    # a sandboxed child: both names, because which one a platform reads differs.
+    # Only the Windows runs can see the behaviour; this sees the helper anywhere.
+    check("sandbox home: HOME and USERPROFILE are both redirected",
+          home_env({"HOME": "/real", "KEEP": "1"}, "/sandbox")
+          == {"HOME": "/sandbox", "USERPROFILE": "/sandbox", "KEEP": "1"})
+
     # --apply parse: strict where the file parse above is forgiving. The two
     # refusal checks run against known-bad input by construction -- they are the
     # observation that the guard fires, not an assumption that it would.
@@ -1535,7 +1550,7 @@ def selftest():
                 def _bar(config_path):
                     bar_env = dict(os.environ)
                     bar_env.pop("STATUSLINE_PAYLOAD_DUMP", None)
-                    bar_env["HOME"] = td
+                    home_env(bar_env, td)
                     bar_env["STATUSLINE_CONFIG"] = config_path
                     return subprocess.run(
                         [node, DEFAULT_JS],
@@ -1556,7 +1571,7 @@ def selftest():
                     r_env = dict(os.environ)
                     for name in ("STATUSLINE_PAYLOAD_DUMP", "NO_COLOR"):
                         r_env.pop(name, None)
-                    r_env["HOME"] = td
+                    home_env(r_env, td)
                     cfg_file = os.path.join(td, "render-cfg.json")
                     if config is None:
                         cfg_file = os.path.join(td, "no-such-config.json")
@@ -1647,8 +1662,10 @@ def selftest():
                 # colors:false reach it too
                 unparseable = subprocess.run(
                     [node, DEFAULT_JS], input=b"not json", capture_output=True,
-                    env=dict(os.environ, NO_COLOR="1", HOME=td,
+                    env=home_env(
+                        dict(os.environ, NO_COLOR="1",
                              STATUSLINE_CONFIG=os.path.join(td, "no-such.json")),
+                        td),
                     timeout=PREVIEW_TIMEOUT).stdout
                 check("error line: NO_COLOR strips it like the rest of the bar",
                       unparseable.startswith(b"statusline error:")
@@ -1722,7 +1739,7 @@ def selftest():
                 shutil.copy2(os.path.abspath(__file__), lone)
                 lone_env = dict(os.environ)
                 lone_env.pop("STATUSLINE_JS", None)
-                lone_env["HOME"] = bare_home
+                home_env(lone_env, bare_home)
                 missing = subprocess.run(
                     [sys.executable, lone, "--show"],
                     capture_output=True, text=True, env=lone_env)
@@ -1851,12 +1868,32 @@ def selftest():
         def _alarm(_sig, _frame):
             raise TimeoutError("pty reader blocked")
 
+        def _watchdog(seconds):
+            # Fires after `seconds` and then every second until it is switched
+            # off. The exception it raises unwinds through the reader's own
+            # restore, which is a second blocking call: a one-shot alarm was
+            # spent by then, and the selftest hung instead of failing (observed
+            # 2026-09-17 on macos-26-arm64, Python 3.8 and 3.14).
+            signal.setitimer(signal.ITIMER_REAL, seconds, 1)
+
+        def _watchdog_off():
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
+        close_watchdog = 5
         master, slave = os.openpty()
         gen = None
         before = None
         old_handler = signal.signal(signal.SIGALRM, _alarm)
-        signal.alarm(10)
+        _watchdog(10)
         try:
+            # No echo on this fixture. The first key is written before the
+            # reader has entered raw mode, so a cooked slave would echo it, and
+            # nothing here reads the master. macOS holds raw entry with
+            # TCSADRAIN until that echo is read, which is never; Linux does not
+            # wait. A real terminal reads its side all the time.
+            quiet = _termios.tcgetattr(slave)
+            quiet[3] &= ~_termios.ECHO
+            _termios.tcsetattr(slave, _termios.TCSANOW, quiet)
             before = _termios.tcgetattr(slave)
             gen = read_keys_tty(_FdStdin(slave))
             os.write(master, b"\x1b[A")
@@ -1884,14 +1921,58 @@ def selftest():
         except TimeoutError:
             check("pty reader: never blocks past the settle window", False)
         finally:
-            signal.alarm(0)
+            # close() is where the reader restores the terminal on every run that
+            # did not time out, so the watchdog has to cover it as well. Switched
+            # off first, a restore that blocks hung the selftest with all eleven
+            # key checks green.
+            close_returned = True
+            try:
+                _watchdog(close_watchdog)
+                if gen is not None:
+                    gen.close()
+            except TimeoutError:
+                close_returned = False
+            finally:
+                _watchdog_off()
             signal.signal(signal.SIGALRM, old_handler)
-            if gen is not None:
-                gen.close()
-            restored = before is not None and _termios.tcgetattr(slave) == before
+            after = _termios.tcgetattr(slave) if before is not None else None
             os.close(master)
             os.close(slave)
-        check("pty reader: termios restored on close", restored)
+        check("pty reader: the restore on close returns", close_returned)
+
+        def _settings(attrs):
+            # PENDIN is the kernel's own note that typed-ahead input waits to be
+            # re-read. On macOS it comes back raised after every raw round trip,
+            # typed input or not (measured on hosted macos-26-arm64, 2026-09-17;
+            # Linux returns the flags identical), so it is state the reader
+            # cannot put back, not a setting it left behind. Everything else has
+            # to come back exactly.
+            settings = list(attrs)
+            settings[3] &= ~getattr(_termios, "PENDIN", 0)
+            # tcgetattr hands VMIN and VTIME back as ints while ICANON is clear
+            # and as one-byte strings while it is set: same value, other type
+            settings[6] = [bytes([c]) if isinstance(c, int) else c
+                           for c in settings[6]]
+            return settings
+
+        restored = before is not None and _settings(after) == _settings(before)
+
+        def _difference(field, was, now):
+            if field == "cc":
+                return "cc " + ", ".join(
+                    "[%d] %r -> %r" % (slot, w, n)
+                    for slot, (w, n) in enumerate(zip(was, now)) if w != n)
+            return "%s %#x -> %#x" % (field, was, now)
+
+        differs = ""
+        if before is not None and not restored:
+            fields = ("iflag", "oflag", "cflag", "lflag", "ispeed", "ospeed", "cc")
+            differs = " -- differs in " + "; ".join(
+                _difference(field, was, now)
+                for field, was, now in zip(fields, _settings(before), _settings(after))
+                if was != now)
+        check("pty reader: termios restored on close, PENDIN aside" + differs,
+              restored)
 
         # Launch-window guard. The byte must be INGESTED before raw entry, and
         # its echo on the master is the proof: a byte still in flight to the
@@ -1929,7 +2010,7 @@ def selftest():
             detail = ""
             verdict = False
             old = signal.signal(signal.SIGALRM, _alarm)
-            signal.alarm(arm_watchdog)
+            _watchdog(arm_watchdog)
             try:
                 fds.extend(os.openpty())
                 if _ingested(fds[0]):
@@ -1941,7 +2022,7 @@ def selftest():
             except OSError as exc:
                 verdict, detail = False, " -- pty fixture failed: %s" % exc
             finally:
-                signal.alarm(0)
+                _watchdog_off()
                 signal.signal(signal.SIGALRM, old)
                 for fd in fds:
                     os.close(fd)
