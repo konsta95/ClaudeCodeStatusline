@@ -3,7 +3,7 @@
 Notable changes per release, newest first. Versions are git tags, and the dates live on the
 tags and on the GitHub releases rather than here. Numbers in parentheses are pull requests.
 
-## Unreleased
+## 0.2.1
 
 ### Added
 
