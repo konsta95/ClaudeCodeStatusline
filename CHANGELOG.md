@@ -14,15 +14,18 @@ tags and on the GitHub releases rather than here. Numbers in parentheses are pul
 ### Fixed
 
 - On Windows a sandboxed child still used the real profile, because only `HOME` was
-  redirected and Windows reads `USERPROFILE`. `--selftest` wrote its fixture payload into
-  the user's own probe file. Found by the first Windows run (#23).
+  redirected and Windows reads `USERPROFILE`. With a `.claude` directory in the profile,
+  which every Claude Code install has, `--selftest` wrote its fixture payload over the user's
+  own probe file; measured on a hosted Windows runner. Found by the first Windows run (#23).
 - `--selftest` hung on macOS. The pty reader fixture echoed its first key and never read the
   master, macOS holds raw-mode entry until that echo is read, and the one-shot watchdog was
-  spent by the time the reader's own restore blocked as well. The fixture no longer echoes and
-  the watchdog repeats. Found by the first macOS run (#23).
-- "termios restored on close" compared terminal settings byte for byte, which can never
-  hold on macOS: the kernel raises `PENDIN` by itself when canonical mode is re-entered. The
-  check leaves that bit out and names the fields that differ when it fails (#23).
+  spent by the time the reader's own restore blocked as well. The fixture no longer echoes,
+  the watchdog repeats, and it covers the reader's restore on close. Found by the first
+  macOS run (#23).
+- "termios restored on close" compared terminal settings byte for byte. On macOS the local
+  flags come back with `PENDIN` raised after every raw round trip, typed input or not,
+  measured on a hosted runner; on Linux they come back identical. The check leaves that one
+  bit out, says so in its name, and names the fields that differ when it fails (#23).
 
 ## 0.2.0
 

@@ -60,14 +60,14 @@ and the mapping is pinned by the built-in checks on every platform — though it
 been driven on a physical Windows console, so run `--selftest` there first. The hosted
 Windows and macOS runs cover the built-in checks and `--show`. On macOS that includes the key
 reader on a real pty; on Windows the pty checks are skipped, because there is no pty. Neither
-run drives the interactive picker. A console that
-cannot do ANSI, or a platform with neither API, gets a clean exit `2` saying so rather than
-a traceback. `--show`, `--selftest`, `--apply`, `--colors` and `--scheme` run anywhere, which is what
-makes the `/statusline` command's default AskUserQuestion path platform-independent:
-nothing in it touches a tty. Only
-the command's tmux-pane path additionally wants `tmux`, and its watchdog wants GNU `timeout`,
-which base macOS does not ship: install coreutils (Homebrew names it `gtimeout`) and the
-command finds either. Without one it still runs, but the wait for the pane is then unbounded.
+run drives the interactive picker. A console that cannot do ANSI, or a platform with neither
+API, gets a clean exit `2` saying so rather than a traceback. `--show`, `--selftest`,
+`--apply`, `--colors` and `--scheme` run anywhere, which is what makes the `/statusline`
+command's default AskUserQuestion path platform-independent: nothing in it touches a tty.
+Only the command's tmux-pane path additionally wants `tmux`, and its watchdog wants GNU
+`timeout`, which base macOS does not ship: install coreutils (Homebrew names it `gtimeout`)
+and the command finds either. Without one it still runs, but the wait for the pane is then
+unbounded.
 
 ```bash
 git clone https://github.com/konsta95/ClaudeCodeStatusline ~/ClaudeCodeStatusline

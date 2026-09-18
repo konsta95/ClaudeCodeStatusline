@@ -1942,9 +1942,11 @@ def selftest():
 
         def _settings(attrs):
             # PENDIN is the kernel's own note that typed-ahead input waits to be
-            # re-read. macOS raises it whenever canonical mode is re-entered, so
-            # it is state the reader cannot put back, not a setting it left
-            # behind. Everything else has to come back exactly.
+            # re-read. On macOS it comes back raised after every raw round trip,
+            # typed input or not (measured on hosted macos-26-arm64, 2026-09-17;
+            # Linux returns the flags identical), so it is state the reader
+            # cannot put back, not a setting it left behind. Everything else has
+            # to come back exactly.
             settings = list(attrs)
             settings[3] &= ~getattr(_termios, "PENDIN", 0)
             # tcgetattr hands VMIN and VTIME back as ints while ICANON is clear

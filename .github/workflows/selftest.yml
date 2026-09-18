@@ -56,62 +56,6 @@ jobs:
           rendered = (shown.returncode == 0 and len(preview) == 1
                       and b"[preview" not in preview[0] and b"83K/1M" in preview[0])
           sys.exit(0 if rendered else "the preview line is missing, bracketed, or not the fixture bar")
-      # MEASUREMENT, temporary. Does a HOME-only sandbox let the selftest write into the real
-      # profile once that profile has a .claude directory, as every Claude Code user's does?
-      - name: MEASUREMENT HOME-only sandbox against a real profile
-        if: runner.os == 'Windows'
-        shell: python
-        run: |
-          import io, os, shutil, subprocess, sys
-          src = io.open("statusline_picker.py", encoding="utf-8").read()
-          line = '    env["USERPROFILE"] = home\n'
-          assert src.count(line) == 1, src.count(line)
-          os.makedirs("homeonly", exist_ok=True)
-          io.open("homeonly/statusline_picker.py", "w", encoding="utf-8", newline="\n").write(src.replace(line, ""))
-          shutil.copy2("statusline.js", "homeonly/statusline.js")
-          real = os.path.join(os.path.expanduser("~"), ".claude")
-          probe = os.path.join(real, "statusline-payload-last.json")
-          def arm(label, picker):
-              out = subprocess.run([sys.executable, "-u", picker, "--selftest"], capture_output=True)
-              lines = [l for l in out.stdout.decode("utf-8", "replace").splitlines()
-                       if l.startswith("FAIL") or "passed" in l]
-              print("ARM %s | .claude in the real profile: %s | %s | probe file in the REAL profile afterwards: %s"
-                    % (label, os.path.isdir(real), lines, os.path.exists(probe)), flush=True)
-              if os.path.exists(probe):
-                  print("    first bytes:", io.open(probe, encoding="utf-8").read(120).replace("\n", " "), flush=True)
-                  os.remove(probe)
-          arm("1 HOME-only, profile as the runner ships it", "homeonly/statusline_picker.py")
-          os.makedirs(real, exist_ok=True)
-          arm("2 HOME-only, profile with .claude", "homeonly/statusline_picker.py")
-          arm("3 fixed picker, profile with .claude", "statusline_picker.py")
-      # MEASUREMENT, temporary. Which termios field differs after raw entry and restore?
-      - name: MEASUREMENT termios before and after a raw round trip
-        if: runner.os != 'Windows'
-        shell: python
-        run: |
-          import os, termios, tty
-          names = ("iflag", "oflag", "cflag", "lflag", "ispeed", "ospeed", "cc")
-          def round_trip(label, typed):
-              master, slave = os.openpty()
-              quiet = termios.tcgetattr(slave)
-              quiet[3] &= ~termios.ECHO
-              termios.tcsetattr(slave, termios.TCSANOW, quiet)
-              before = termios.tcgetattr(slave)
-              if typed:
-                  os.write(master, typed)
-              tty.setraw(slave, termios.TCSADRAIN)
-              if typed:
-                  os.read(slave, len(typed))
-              termios.tcsetattr(slave, termios.TCSADRAIN, before)
-              after = termios.tcgetattr(slave)
-              diff = ["%s %#x -> %#x (xor %#x)" % (n, b, a, b ^ a)
-                      for n, b, a in zip(names[:6], before[:6], after[:6]) if a != b]
-              if before[6] != after[6]:
-                  diff.append("cc differs")
-              print("%s | termios.PENDIN = %#x | %s" % (label, termios.PENDIN, diff or "identical"), flush=True)
-              os.close(master); os.close(slave)
-          round_trip("no input", b"")
-          round_trip("one key typed before raw entry and read in raw mode", b"q")
 
   floors:
     # The README states Python 3.7 and Node 12.5 as floors. This job is what makes that a
